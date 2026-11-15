@@ -36,10 +36,6 @@ static void heapfree(void *p) {
     }
 }
 
-static f32 clampf(f32 v, f32 lo, f32 hi) {
-    return v<lo ? lo : v>hi ? hi : v;
-}
-
 static u32 colorkey(Color c) {
     return (u32)c.r | (u32)c.g<<8 | (u32)c.b<<16 | (u32)c.a<<24;
 }
@@ -317,6 +313,9 @@ struct Paragraph {
     iz           nlines;
     Size         size;
     u32          gen;       // render target generation of the drawing effects
+    b32          boxes;     // has inline boxes
+    f32          natheight; // first line, before os_para_style
+    f32          natbase;
 };
 
 // Fetch size and line metrics from the layout after (re)wrapping.
@@ -414,6 +413,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
         pr->color = r->color;
         pr->link  = r->link;
         pr->box   = r->box_w>0 && r->box_h>0;
+        p->boxes |= pr->box;
         Str s = r->text;
         if (pr->box) {
             s = (Str){(u8 *)"\xEF\xBF\xBC", 3};    // U+FFFC
@@ -491,7 +491,22 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
     }
 
     para_measure(p);
+    if (p->nlines) {
+        p->natheight = p->lines[0].height;
+        p->natbase   = p->lines[0].baseline;
+    }
     return p;
+}
+
+static void os_para_style(Paragraph *p, f32 line_height, Align align) {
+    COM(p->layout, SetTextAlignment, align==ALIGN_CENTER ? DWRITE_TEXT_ALIGNMENT_CENTER :
+        align==ALIGN_RIGHT ? DWRITE_TEXT_ALIGNMENT_TRAILING : DWRITE_TEXT_ALIGNMENT_LEADING);
+    if (line_height>0 && !p->boxes && p->natheight>0) {
+        // Half-leading above and below, like CSS.
+        f32 base = p->natbase + (line_height - p->natheight)/2;
+        COM(p->layout, SetLineSpacing, DWRITE_LINE_SPACING_METHOD_UNIFORM, line_height, base);
+    }
+    para_measure(p);
 }
 
 static void os_para_set_width(Paragraph *p, f32 max_width) {

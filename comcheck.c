@@ -197,6 +197,12 @@ SLOT(WndClassEx, WNDCLASSEXW, menuname, lpszMenuName);
 SLOT(WndClassEx, WNDCLASSEXW, classname, lpszClassName);
 SLOT(WndClassEx, WNDCLASSEXW, iconsm, hIconSm);
 
+SIZE(TrackMouse, TRACKMOUSEEVENT);
+SLOT(TrackMouse, TRACKMOUSEEVENT, size, cbSize);
+SLOT(TrackMouse, TRACKMOUSEEVENT, flags, dwFlags);
+SLOT(TrackMouse, TRACKMOUSEEVENT, hwnd, hwndTrack);
+SLOT(TrackMouse, TRACKMOUSEEVENT, hover, dwHoverTime);
+
 SIZE(PaintStruct, PAINTSTRUCT);
 SLOT(PaintStruct, PAINTSTRUCT, hdc, hdc); SLOT(PaintStruct, PAINTSTRUCT, erase, fErase);
 SLOT(PaintStruct, PAINTSTRUCT, paint, rcPaint);

@@ -2,3 +2,4 @@
 *.def
 comcheck-consts.inc
 .claude/
+md-bench.txt

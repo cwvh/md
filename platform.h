@@ -37,6 +37,10 @@ static Color rgb(u8 r, u8 g, u8 b) {
     return (Color){r, g, b, 255};
 }
 
+static f32 clampf(f32 v, f32 lo, f32 hi) {
+    return v<lo ? lo : v>hi ? hi : v;
+}
+
 
 // Memory
 
@@ -101,6 +105,20 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width);
 static void os_para_set_width(Paragraph *, f32 max_width);
 
 static void os_para_free(Paragraph *);
+
+typedef enum {
+    ALIGN_LEFT,
+    ALIGN_CENTER,
+    ALIGN_RIGHT,
+} Align;
+
+// Paragraph-wide style, applied after os_para_new (and kept across
+// os_para_set_width). Lines are line_height DIPs tall, the text centered in
+// them as in CSS; zero keeps the font's natural height. A paragraph with
+// inline boxes ignores line_height, so that a tall box can grow its line.
+// align places each line within max_width; with no wrapping width, lines
+// are laid out from the left whatever align says.
+static void os_para_style(Paragraph *, f32 line_height, Align);
 
 // Length in bytes of the paragraph's text.
 static iz os_para_length(Paragraph *);
@@ -282,7 +300,7 @@ typedef enum {
 } Button;
 
 
-// Callbacks, implemented by portable code (view.c; demo.c until then). The
+// Callbacks, implemented by portable code (view.c). The
 // platform calls them from its message loop; all take DIPs. Memory: the
 // platform gives the app one permanent arena at init, and a scratch arena
 // by value on every paint (its contents don't survive the call). Portable
@@ -308,6 +326,7 @@ static void app_key(Key key, u32 mods);
 static void app_char(i32 rune);
 
 static void app_mouse_move(Point p, u32 mods);
+static void app_mouse_leave(void);                      // the pointer left the window
 static void app_mouse_down(Point p, Button b, u32 mods);
 static void app_mouse_up(Point p, Button b, u32 mods);
 static void app_double_click(Point p, u32 mods);        // left button; follows a mouse_down

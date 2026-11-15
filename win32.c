@@ -89,6 +89,13 @@ typedef struct {
 } PaintStruct;
 
 typedef struct {
+    u32  size;
+    u32  flags;
+    uptr hwnd;
+    u32  hover;
+} TrackMouse;
+
+typedef struct {
     WinPoint reserved;
     WinPoint maxsize;
     WinPoint maxpos;
@@ -354,7 +361,7 @@ struct DwLayoutVtbl {
     void *SetFlowDirection;
     void *SetIncrementalTabStop;
     void *SetTrimming;
-    void *SetLineSpacing;
+    i32 (*SetLineSpacing)(DwLayout *, u32 method, f32 height, f32 baseline);
     void *GetTextAlignment;
     void *GetParagraphAlignment;
     void *GetWordWrapping;
@@ -443,6 +450,8 @@ enum {
     STD_ERROR_HANDLE  = -12,
 
     GENERIC_READ          = (i32)0x80000000,
+    GENERIC_WRITE         = 0x40000000,
+    CREATE_ALWAYS         = 2,
     FILE_SHARE_READ       = 0x0001,
     FILE_SHARE_WRITE      = 0x0002,
     FILE_SHARE_DELETE     = 0x0004,
@@ -493,9 +502,12 @@ enum {
     WM_MBUTTONUP     = 0x0208,
     WM_MOUSEWHEEL    = 0x020a,
     WM_MOUSEHWHEEL   = 0x020e,
+    WM_MOUSELEAVE    = 0x02a3,
     WM_CAPTURECHANGED = 0x0215,
     WM_DROPFILES     = 0x0233,
     WM_DPICHANGED    = 0x02e0,
+
+    TME_LEAVE  = 0x0002,
 
     MK_SHIFT   = 0x0004,
     MK_CONTROL = 0x0008,
@@ -548,6 +560,10 @@ enum {
     DWRITE_FONT_STYLE_ITALIC = 2,
     DWRITE_FONT_STRETCH_NORMAL = 5,
     DWRITE_BREAK_CONDITION_NEUTRAL = 0,
+    DWRITE_TEXT_ALIGNMENT_LEADING = 0,
+    DWRITE_TEXT_ALIGNMENT_TRAILING = 1,
+    DWRITE_TEXT_ALIGNMENT_CENTER = 2,
+    DWRITE_LINE_SPACING_METHOD_UNIFORM = 1,
 };
 // END CONSTANTS
 
@@ -621,6 +637,7 @@ W32(uptr)   SetCursor(uptr);
 W32(uptr)   SetCapture(uptr);
 W32(b32)    ReleaseCapture(void);
 W32(i16)    GetKeyState(i32);
+W32(b32)    TrackMouseEvent(TrackMouse *);
 W32(b32)    ScreenToClient(uptr, WinPoint *);
 W32(i32)    MessageBoxW(uptr, c16 const *, c16 const *, u32);
 W32(b32)    OpenClipboard(uptr);

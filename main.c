@@ -1,16 +1,23 @@
 // md: a tiny native Markdown viewer, built without a C runtime
 //   $ make                 # md.exe
 //   $ make md-debug.exe    # debug info, UBSan traps, guard pages
-// Unity build: this file includes all the others. Portable code (md.c, and
-// later layout and view) talks to the OS only through platform.h; this file
-// and gfx.c are its Windows implementation.
+// Unity build: this file includes all the others. Portable code (the parser,
+// layout and view) talks to the OS only through platform.h; this file and
+// gfx.c are its Windows implementation.
 #include "base.c"
 #include "platform.h"
 #include "md.c"
+#include "highlight.c"
+#include "layout.c"
+#include "view.c"
 #include "win32.c"
 #include "gfx.c"
-#ifndef MD_VIEW
-#  include "demo.c"     // TODO(milestone 3): delete along with demo.c
+
+// Debug builds (and the BENCH build of the Makefile) take --bench: time the
+// start up and a run of scrolled paints, write the numbers to md-bench.txt in
+// the current directory, and quit.
+#if defined(DEBUG) || defined(BENCH)
+#  define BENCHMARK 1
 #endif
 
 
@@ -33,6 +40,7 @@ static struct {
     Cursor   cursor;
     u32      dpi;               // window DPI, 96 at scale 1
     b32      ready;             // app_init has run
+    b32      tracking;          // a mouse leave notification is pending
     b32      dark;
     i32      darkforce;         // debug builds: 1 dark, 2 light, 0 system
     Arena    tmp;               // platform scratch, for string conversion
@@ -371,9 +379,83 @@ static Point mousepos(iptr lparam) {
     return (Point){todip((i16)(lparam & 0xffff)), todip((i16)((lparam >> 16) & 0xffff))};
 }
 
-static void draw_frame(void) {
-    app_paint(g.scratch, os_window_size());
+#ifdef BENCHMARK
+static struct {
+    b32 on;
+    b32 done;
+    i64 freq, start, init;
+    i64 paint;              // time in the app's paint, the last frame
+    Str name;
+} bench;
+
+static i64 bench_now(void) {
+    i64 t = 0;
+    QueryPerformanceCounter(&t);
+    return t;
 }
+
+static i64 bench_us(i64 from, i64 to) {
+    return (to - from)*1000000/bench.freq;
+}
+#endif
+
+static void draw_frame(void) {
+#ifdef BENCHMARK
+    i64 t = bench_now();
+#endif
+    app_paint(g.scratch, os_window_size());
+#ifdef BENCHMARK
+    bench.paint = bench_now() - t;
+#endif
+}
+
+#ifdef BENCHMARK
+
+// After the first paint: report it, then page down through the document and
+// report the average and worst paint.
+static void bench_report(i64 first) {
+    bench.done = 1;
+    // A GUI process has no stdout to speak of, so the report goes to a file.
+    uptr    f = CreateFileW(L"md-bench.txt", GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, 0);
+    static u8 buf[4096];
+    Output out = {buf, 0, 0, sizeof(buf), f, 0, 0};
+    Output *o  = &out;
+    print(o, S("bench "));
+    print(o, bench.name);
+    print(o, S("\n  init        "));
+    printi64(o, bench_us(bench.start, bench.init));
+    print(o, S(" us\n  first paint, app only "));
+    printi64(o, bench_us(0, bench.paint));
+    print(o, S(" us\n  first paint, with the window "));
+    printi64(o, bench_us(bench.init, first));
+    print(o, S(" us\n  to first paint "));
+    printi64(o, bench_us(bench.start, first));
+    print(o, S(" us\n"));
+    // Page down through the document. Presenting waits for the display, so
+    // only the app's own time is counted.
+    i64 total = 0;
+    i64 worst = 0;
+    i32 n     = 0;
+    for (; n < 200; n++) {
+        app_key(KEY_PGDN, 0);
+        gfx_paint(draw_frame);
+        i64 us = bench_us(0, bench.paint);
+        total += us;
+        worst  = max(worst, us);
+    }
+    print(o, S("  scrolled paint, "));
+    printi64(o, n);
+    print(o, S(" pages: avg "));
+    printi64(o, total/n);
+    print(o, S(" us, worst "));
+    printi64(o, worst);
+    print(o, S(" us (app_paint only)\n"));
+    flush(o);
+    CloseHandle(f);
+    os_quit();
+}
+#endif
 
 static void win_paint(void) {
     WinRect rc = {0};
@@ -386,6 +468,11 @@ static void win_paint(void) {
     if (gfx_paint(draw_frame) == D2DERR_RECREATE_TARGET) {
         os_invalidate();    // paint again on a new target
     }
+#ifdef BENCHMARK
+    if (bench.on && !bench.done) {
+        bench_report(bench_now());
+    }
+#endif
 }
 
 static void win_resized(void) {
@@ -501,8 +588,19 @@ static iptr wndproc(uptr hwnd, u32 msg, uptr wp, iptr lp) {
     }
 
     case WM_MOUSEMOVE:
+        if (!g.tracking) {
+            TrackMouse tm = {sizeof(tm), TME_LEAVE, hwnd, 0};
+            g.tracking = TrackMouseEvent(&tm);
+        }
         if (g.ready) {
             app_mouse_move(mousepos(lp), currentmods());
+        }
+        return 0;
+
+    case WM_MOUSELEAVE:
+        g.tracking = 0;
+        if (g.ready) {
+            app_mouse_leave();
         }
         return 0;
 
@@ -667,6 +765,12 @@ static i32 run(Arena all) {
             continue;
         }
 #endif
+#ifdef BENCHMARK
+        if (equals(args.argv[i], S("--bench"))) {
+            bench.on = 1;
+            continue;
+        }
+#endif
         if (!path.len) {
             path = args.argv[i];
         }
@@ -729,7 +833,15 @@ static i32 run(Arena all) {
     apply_title_theme();
     DragAcceptFiles(g.hwnd, 1);
 
+#ifdef BENCHMARK
+    QueryPerformanceFrequency(&bench.freq);
+    bench.start = bench_now();
+    bench.name  = path;
+#endif
     app_init(&perm, path, os_window_size());
+#ifdef BENCHMARK
+    bench.init = bench_now();
+#endif
     g.ready = 1;
     ShowWindow(g.hwnd, SW_SHOW);
     os_invalidate();
