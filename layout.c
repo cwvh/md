@@ -120,6 +120,7 @@ struct Table {
     f32        *colx;       // ncols+1: x of each column's left border
     f32        *rowy;       // nrows+1: y of each row's top border
     i32         nrows, ncols;
+    f32         padx;       // cell padding left and right, shrunk in narrow tables
     b32         built;      // cell paragraphs exist and match the leaf's layout
 };
 
@@ -429,6 +430,7 @@ typedef struct {
 typedef struct {
     iz        off;          // where its 3 bytes are in the paragraph
     ImgEntry *img;
+    f32       w, h;         // the box's size; its bottom edge is on the line's baseline
 } ImgBox;
 
 // Collects the runs of one paragraph, and what the painter needs to know
@@ -573,7 +575,7 @@ static void rb_box(RB *rb, Run const *st, f32 w, f32 h, ImgEntry *img) {
     r->box_h  = h;
     rb->off[rb->n] = 0;
     rb->n++;
-    rb->boxes[rb->nboxes++] = (ImgBox){rb->len, img};
+    rb->boxes[rb->nboxes++] = (ImgBox){rb->len, img, w, h};
     rb->len    += 3;
     rb->atstart = 0;
 }
@@ -1262,6 +1264,10 @@ static void leaf_geometry(Leaf *l) {
     }
 }
 
+static b32 near_f(f32 a, f32 b) {
+    return a - b < 1e-6f && b - a < 1e-6f;
+}
+
 static f32 est_lines(iz chars, f32 size, f32 w) {
     f32 per = max(w/(size*0.5f), (f32)1);
     return max(fceil((f32)chars/per), (f32)1);
@@ -1505,7 +1511,8 @@ static void table_make(Leaf *l, RB *rb) {
     table_free_cells(tb);
     i32 nr = tb->nrows, nc = tb->ncols;
     f32 lh = line_body*z;
-    f32 padx = M_CELL_PADX*z, pady = M_CELL_PADY*z;
+    f32 padx = min(M_CELL_PADX*z, max((l->w - (f32)(2*nc + 1))/(f32)(2*nc), (f32)0)), pady = M_CELL_PADY*z;
+    tb->padx = padx;
     Color fg = l->flags & LF_MUTED ? D.th->muted : D.th->text;
     for (i32 c = 0; c < nc; c++) {
         tb->colw[c] = 0;
@@ -1542,42 +1549,27 @@ static void table_make(Leaf *l, RB *rb) {
         sum += tb->colw[c];
     }
     if (sum > avail) {
-        f32 minw = min(24*z, max(avail/(f32)nc, (f32)1));
-        f32 fixed = 0;      // columns already at their minimum
-        f32 flex  = sum;
+        // Shrink in proportion, but not below a minimum: columns that would
+        // fall under it stay there and the others share what is left.
+        f32 minw  = min(24*z, max(avail/(f32)nc, (f32)1));
+        f32 scale = avail/sum;
         for (i32 pass = 0; pass < nc; pass++) {
-            f32 scale = (avail - fixed)/flex;
-            b32 again = 0;
-            f32 nfixed = 0, nflex = 0;
+            f32 pinned = 0, flex = 0;
             for (i32 c = 0; c < nc; c++) {
-                f32 w = tb->colw[c];
-                if (w*scale < minw) {
-                    nfixed += minw;
-                    again = w > minw;
-                    tb->colw[c] = minw;
+                if (tb->colw[c]*scale < minw) {
+                    pinned += minw;
                 } else {
-                    nflex += w;
+                    flex += tb->colw[c];
                 }
             }
-            if (!again || nflex <= 0) {
+            f32 next = flex > 0 ? (avail - pinned)/flex : scale;
+            if (near_f(next, scale)) {
                 break;
             }
-            fixed = nfixed;
-            flex  = nflex;
-        }
-        // Whatever is not at the minimum shares what is left.
-        f32 left = avail, share = 0;
-        for (i32 c = 0; c < nc; c++) {
-            if (tb->colw[c] <= minw) {
-                left -= minw;
-            } else {
-                share += tb->colw[c];
-            }
+            scale = next;
         }
         for (i32 c = 0; c < nc; c++) {
-            if (tb->colw[c] > minw) {
-                tb->colw[c] = max(tb->colw[c]*left/share, minw);
-            }
+            tb->colw[c] = max(tb->colw[c]*scale, minw);
         }
     }
     tb->colx[0] = 0;
@@ -1788,14 +1780,25 @@ static void draw_spans(RB *rb, Paragraph *p, Point o) {
 
 static void draw_boxes(RB *rb, Paragraph *p, Point o) {
     for (iz i = 0; i < rb->nboxes; i++) {
+        // The platform says where the box is horizontally and on which line;
+        // its size is known, and it stands on the baseline.
+        ImgBox *bx = rb->boxes + i;
         Rect r = {0};
-        if (os_para_rects(p, rb->boxes[i].off, rb->boxes[i].off + 3, &r, 1) >= 1) {
-            ImgEntry *e = rb->boxes[i].img;
+        if (os_para_rects(p, bx->off, bx->off + 3, &r, 1) >= 1) {
+            f32 base = r.y + r.h;
+            for (iz k = 0; k < os_para_lines(p); k++) {
+                LineMetrics m = os_para_line(p, k);
+                if (m.beg <= bx->off && bx->off < m.end) {
+                    base = m.top + m.baseline;
+                    break;
+                }
+            }
+            ImgEntry *e = bx->img;
             e->drawn = 1;
             if (e->frames > 1) {
                 D.anim = 1;
             }
-            os_image_draw(e->im, e->frame, (Rect){o.x + r.x, o.y + r.y, r.w, r.h});
+            os_image_draw(e->im, e->frame, (Rect){o.x + r.x, o.y + base - bx->h, bx->w, bx->h});
         }
     }
 }
@@ -1808,7 +1811,7 @@ static void draw_table(Leaf *l, f32 x, f32 y, RB *rb) {
     }
     Theme const *t = D.th;
     f32 w = tb->colx[tb->ncols] + 1;
-    f32 padx = M_CELL_PADX*z, pady = M_CELL_PADY*z;
+    f32 padx = tb->padx, pady = M_CELL_PADY*z;
     // Alternate rows, then the grid, then the text.
     for (i32 r = 2; r < tb->nrows; r += 2) {
         os_fill_rect((Rect){x, y + tb->rowy[r], w, tb->rowy[r+1] - tb->rowy[r]}, t->alt_row);
@@ -2042,7 +2045,7 @@ static Hit doc_hit(Point p, f32 scroll) {
         h.p    = tb->cell[h.cell];
         if (h.p) {
             f32 z = D.zoom;
-            h.origin = (Point){x + tb->colx[c] + 1 + M_CELL_PADX*z, y + tb->rowy[r] + 1 + M_CELL_PADY*z};
+            h.origin = (Point){x + tb->colx[c] + 1 + tb->padx, y + tb->rowy[r] + 1 + M_CELL_PADY*z};
         }
     } else if (l->p) {
         h.p      = l->p;
