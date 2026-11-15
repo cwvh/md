@@ -15,7 +15,7 @@ LDLIBS   = -lkernel32 -luser32 -lgdi32 -lole32 -ladvapi32 -lshell32 \
 TESTLIBS = -lkernel32 -lgcc
 # Portable core, then the Windows layer.
 CORE     = base.c platform.h md.c
-SRC      = $(CORE) win32.c
+SRC      = $(CORE) win32.c gfx.c demo.c
 
 md.exe: main.c $(SRC)
 	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(LDLIBS)
@@ -29,12 +29,24 @@ md-test.exe: test.c $(SRC)
 test: md-test.exe
 	./md-test.exe
 
-# Compile-time check of the hand-written COM declarations in win32.c
-# against the official mingw headers. Produces no binary.
-comcheck: comcheck.c win32.c
-	$(CC) -std=c11 -fsyntax-only -Wall comcheck.c
+# Check the hand-written COM and Win32 declarations in win32.c against the
+# official mingw headers. Layout (vtable slots, struct fields, GUIDs) is
+# asserted at compile time and run; constants are compared through a file
+# generated from the constants block in win32.c. See comcheck.c. Never
+# shipped, so it uses windows.h and the C runtime.
+CCHECK   = gcc -std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
+
+comcheck-consts.inc: win32.c
+	sed -n '/BEGIN CONSTANTS/,/END CONSTANTS/p' win32.c | \
+	sed -n 's|^ *\([A-Z][A-Za-z0-9_]*\) *= *\([^,]*\),.*|_Static_assert((unsigned)(unsigned long long)(\1) == (unsigned)(\2), "\1");|p' > $@
+
+comcheck: comcheck.c win32.c base.c comcheck-consts.inc
+	$(CCHECK) -o comcheck.exe comcheck.c
+	./comcheck.exe
+	$(CCHECK) -DCONSTS -o comcheck-consts.exe comcheck.c
+	./comcheck-consts.exe
 
 clean:
-	rm -f md.exe md-debug.exe md-test.exe
+	rm -f md.exe md-debug.exe md-test.exe comcheck.exe comcheck-consts.exe comcheck-consts.inc
 
 .PHONY: test comcheck clean
