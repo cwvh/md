@@ -1871,7 +1871,7 @@ static void draw_item(Decor *d, f32 scroll, f32 viewh) {
     Theme const *t = D.th;
     f32 lh;
     f32 base = leaf_baseline(l, &lh) - scroll;
-    f32 cl   = D.colx + (d->x + M_LIST)*z;      // where the item's content starts
+    f32 cl   = D.colx + min((d->x + M_LIST)*z, D.colw*0.6f);   // where its content starts
     if (d->task) {
         f32 s  = 14*z;
         Rect r = {cl - 24*z, base - s + 2*z, s, s};
@@ -1947,7 +1947,7 @@ static void doc_paint(f32 scroll, Size size, RB *rb) {
         f32 top = a->y - scroll;
         f32 bot = b->y + b->h - scroll;
         if (d->kind == DK_QUOTE) {
-            os_fill_rect((Rect){D.colx + d->x*z, top, 4*z, bot - top}, t->quote_bar);
+            os_fill_rect((Rect){D.colx + min(d->x*z, D.colw*0.6f), top, 4*z, bot - top}, t->quote_bar);
         } else if (d->kind == DK_CODE) {
             os_fill_rrect((Rect){D.colx + a->x, top, a->w, bot - top}, 6*z, t->code_bg);
         }

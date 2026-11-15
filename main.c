@@ -43,6 +43,8 @@ static struct {
     b32      tracking;          // a mouse leave notification is pending
     b32      dark;
     i32      darkforce;         // debug builds: 1 dark, 2 light, 0 system
+    i32      zoomsteps;         // debug builds: keys to press after start up, for
+    i32      pagedowns;         //   screenshots without typing into someone's window
     Arena    tmp;               // platform scratch, for string conversion
     Arena    scratch;           // passed to app_paint
     c16      highsurrogate;     // pending first half of a typed pair
@@ -763,6 +765,12 @@ static i32 run(Arena all) {
         } else if (equals(args.argv[i], S("--light"))) {
             g.darkforce = 2;
             continue;
+        } else if (equals(args.argv[i], S("--zoom")) && i+1 < args.argc) {
+            parseint(args.argv[++i], &g.zoomsteps);     // zoom in this many steps
+            continue;
+        } else if (equals(args.argv[i], S("--pgdn")) && i+1 < args.argc) {
+            parseint(args.argv[++i], &g.pagedowns);     // then page down this many times
+            continue;
         }
 #endif
 #ifdef BENCHMARK
@@ -841,6 +849,14 @@ static i32 run(Arena all) {
     app_init(&perm, path, os_window_size());
 #ifdef BENCHMARK
     bench.init = bench_now();
+#endif
+#ifdef DEBUG
+    for (i32 i = 0; i < g.zoomsteps; i++) {
+        app_key(KEY_PLUS, MOD_PRIMARY);
+    }
+    for (i32 i = 0; i < g.pagedowns; i++) {
+        app_key(KEY_PGDN, 0);
+    }
 #endif
     g.ready = 1;
     ShowWindow(g.hwnd, SW_SHOW);

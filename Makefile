@@ -62,6 +62,6 @@ comcheck: comcheck.c win32.c base.c comcheck-consts.inc
 	./comcheck-consts.exe
 
 clean:
-	rm -f md.exe md-debug.exe $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
+	rm -f md.exe md-debug.exe md-bench.exe $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
 
 .PHONY: test comcheck clean
