@@ -14,7 +14,7 @@ LDLIBS   = -lkernel32 -luser32 -lgdi32 -lole32 -ladvapi32 -lshell32 \
            -lcomdlg32 -ldwmapi -ld2d1 -ldwrite -lwindowscodecs -lgcc
 TESTLIBS = -lkernel32 -lgcc
 # Portable core, then the Windows layer.
-CORE     = base.c platform.h md.c mdtables.c
+CORE     = base.c platform.h md.c mdtables.c highlight.c layout.c view.c
 SRC      = $(CORE) win32.c gfx.c demo.c
 
 md.exe: main.c $(SRC)
@@ -26,8 +26,19 @@ md-debug.exe: main.c $(SRC)
 md-test.exe: test.c $(SRC)
 	$(CC) $(CFLAGS) $(DEBUG) -o $@ test.c $(TESTLIBS)
 
-test: md-test.exe
+hl-test.exe: hltest.c base.c win32.c highlight.c
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ hltest.c $(TESTLIBS)
+
+# Layout and view against a fake, deterministic platform (fakeos.c).
+view-test.exe: viewtest.c fakeos.c $(CORE) win32.c
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ viewtest.c $(TESTLIBS)
+
+TESTS    = md-test.exe hl-test.exe view-test.exe
+
+test: $(TESTS)
 	./md-test.exe
+	./hl-test.exe
+	./view-test.exe
 
 # Check the hand-written COM and Win32 declarations in win32.c against the
 # official mingw headers. Layout (vtable slots, struct fields, GUIDs) is
@@ -47,6 +58,6 @@ comcheck: comcheck.c win32.c base.c comcheck-consts.inc
 	./comcheck-consts.exe
 
 clean:
-	rm -f md.exe md-debug.exe md-test.exe comcheck.exe comcheck-consts.exe comcheck-consts.inc
+	rm -f md.exe md-debug.exe $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
 
 .PHONY: test comcheck clean
