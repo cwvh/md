@@ -19,7 +19,7 @@ static struct {
 } gfx;
 
 static void release(void *p) {
-    ComObj *u = (ComObj *)p;
+    ComObj *u = p;
     if (u) {
         COM(u, Release);
     }
@@ -75,7 +75,7 @@ static b32 gfx_init(void) {
                    L"en-us", &fmt))) {
         return 0;
     }
-    gfx.format = (DwLayout *)fmt;
+    gfx.format = fmt;
     return 1;
 }
 
@@ -108,7 +108,7 @@ static b32 gfx_target(uptr hwnd, u32 pw, u32 ph, f32 dpi) {
     if (FAILED(COM(gfx.d2d, CreateHwndRenderTarget, &props, &hp, &rt))) {
         return 0;
     }
-    gfx.rt = (D2dRt *)rt;
+    gfx.rt = rt;
     COM(gfx.rt, SetDpi, dpi, dpi);
     gfx.gen++;
     return 1;
@@ -236,7 +236,8 @@ typedef struct {
 static i32 box_query(void *self, Guid const *iid, void **out) {
     if (guideq(iid, &iid_unknown) || guideq(iid, &iid_dw_inline)) {
         *out = self;
-        ((Box *)self)->refs++;
+        Box *b = self;
+        b->refs++;
         return S_OK;
     }
     *out = 0;
@@ -244,11 +245,12 @@ static i32 box_query(void *self, Guid const *iid, void **out) {
 }
 
 static u32 box_addref(void *self) {
-    return (u32)++((Box *)self)->refs;
+    Box *b = self;
+    return (u32)++b->refs;
 }
 
 static u32 box_release(void *self) {
-    Box *b = (Box *)self;
+    Box *b = self;
     u32  r = (u32)--b->refs;
     if (!r) {
         heapfree(b);
@@ -264,7 +266,7 @@ static i32 box_draw(DwInline *self, void *ctx, void *renderer, f32 ox, f32 oy,
 }
 
 static i32 box_metrics(DwInline *self, DwInlineMetrics *m) {
-    Box *b      = (Box *)self;
+    Box *b      = (Box *)self;   // Box begins with its DwInline
     m->width    = b->w;
     m->height   = b->h;
     m->baseline = b->h;     // bottom edge on the baseline
@@ -334,8 +336,8 @@ static void para_measure(Paragraph *p) {
     if (!n) {
         return;
     }
-    DwLineMetrics *dl = (DwLineMetrics *)heapnew(n, (iz)sizeof(DwLineMetrics));
-    p->lines = (LineMetrics *)heapnew(n, (iz)sizeof(LineMetrics));
+    DwLineMetrics *dl = heapnew(n, (iz)sizeof(DwLineMetrics));
+    p->lines = heapnew(n, (iz)sizeof(LineMetrics));
     if (!dl || !p->lines) {
         heapfree(dl);
         heapfree(p->lines);
@@ -387,15 +389,15 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
         total += runs[i].box_w>0 && runs[i].box_h>0 ? 3 : runs[i].text.len;
     }
 
-    Paragraph *p = (Paragraph *)heapnew(1, (iz)sizeof(Paragraph));
+    Paragraph *p = heapnew(1, (iz)sizeof(Paragraph));
     if (!p) {
         return 0;
     }
     p->len  = total;
-    p->w    = (c16 *)heapnew(total + 1, (iz)sizeof(c16));   // units <= bytes
-    p->u2w  = (i32 *)heapnew(total + 1, (iz)sizeof(i32));
-    p->w2u  = (i32 *)heapnew(total + 2, (iz)sizeof(i32));
-    p->runs = (PRun *)heapnew(nruns, (iz)sizeof(PRun));
+    p->w    = heapnew(total + 1, (iz)sizeof(c16));   // units <= bytes
+    p->u2w  = heapnew(total + 1, (iz)sizeof(i32));
+    p->w2u  = heapnew(total + 2, (iz)sizeof(i32));
+    p->runs = heapnew(nruns, (iz)sizeof(PRun));
     p->nruns = nruns;
     if (!p->w || !p->u2w || !p->w2u || !p->runs) {
         os_para_free(p);
@@ -449,7 +451,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
         os_para_free(p);
         return 0;
     }
-    p->layout = (DwLayout *)lay;
+    p->layout = lay;
 
     for (iz i = 0; i < nruns; i++) {
         Run const *r  = runs + i;
@@ -459,7 +461,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
         }
         DwTextRange range = {pr->wbeg, pr->wlen};
         if (pr->box) {
-            Box *b = (Box *)heapnew(1, (iz)sizeof(Box));
+            Box *b = heapnew(1, (iz)sizeof(Box));
             if (b) {
                 b->v    = &boxvtbl;
                 b->refs = 1;
@@ -554,7 +556,7 @@ static iz os_para_rects(Paragraph *p, iz beg, iz end, Rect *out, iz cap) {
     if (!n) {
         return 0;
     }
-    DwHitTestMetrics *m = (DwHitTestMetrics *)heapnew(n, (iz)sizeof(DwHitTestMetrics));
+    DwHitTestMetrics *m = heapnew(n, (iz)sizeof(DwHitTestMetrics));
     if (!m) {
         return 0;
     }

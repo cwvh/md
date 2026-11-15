@@ -305,7 +305,7 @@ static void os_clipboard_set(Str utf8) {
     if (!mem) {
         return;
     }
-    c16 *w = (c16 *)GlobalLock(mem);
+    c16 *w = GlobalLock(mem);
     if (!w) {
         return;
     }
@@ -744,7 +744,7 @@ static i32 run(Arena all) {
 
 void WinMainCRTStartup(void) {
     iz    cap = TOTAL_SIZE;
-    u8   *mem = (u8 *)VirtualAlloc(0, (uz)cap, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    u8   *mem = VirtualAlloc(0, (uz)cap, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
     if (!mem) {
         ExitProcess(3);
     }
