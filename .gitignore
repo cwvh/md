@@ -1,3 +1,4 @@
 *.exe
 *.def
 comcheck-consts.inc
+.claude/
