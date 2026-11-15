@@ -70,23 +70,6 @@ static f32 const zoom_levels[] = {
 
 // Paths and links
 
-// memcpy for ranges that may overlap. Not allowed to turn itself into a
-// call to memmove, which there is no C runtime to provide.
-__attribute__((optimize("no-tree-loop-distribute-patterns")))
-static void bytes_move(void *to, void const *from, iz n) {
-    u8       *dst = to;
-    u8 const *src = from;
-    if (dst < src) {
-        for (iz i = 0; i < n; i++) {
-            dst[i] = src[i];
-        }
-    } else {
-        for (iz i = n; i > 0; i--) {
-            dst[i-1] = src[i-1];
-        }
-    }
-}
-
 static b32 is_sep(u8 c) {
     return c=='/' || c=='\\';
 }
@@ -164,7 +147,7 @@ static Str resolve_path(u8 *out, iz cap, Str dir, Str rel) {
     // r sits at joined+dir.len+1; put the pieces in order in front of it.
     Str j;
     if (abs) {
-        bytes_move(joined, r.data, r.len);
+        memmove(joined, r.data, (uz)r.len);
         j = (Str){joined, r.len};
     } else {
         memcpy(joined, dir.data, (uz)dir.len);
@@ -172,7 +155,7 @@ static Str resolve_path(u8 *out, iz cap, Str dir, Str rel) {
             joined[dir.len] = sep;
             j = (Str){joined, dir.len + 1 + r.len};
         } else {
-            bytes_move(joined + dir.len, r.data, r.len);
+            memmove(joined + dir.len, r.data, (uz)r.len);
             j = (Str){joined, dir.len + r.len};
         }
     }
@@ -450,7 +433,7 @@ static void hist_push(Str path, Anchor at) {
     hist_save();
     V.nhist = V.nhist ? V.cur + 1 : 0;
     if (V.nhist == HIST) {
-        bytes_move(V.hist, V.hist + 1, (HIST - 1)*(iz)sizeof(HistEntry));
+        memmove(V.hist, V.hist + 1, (uz)((HIST - 1)*(iz)sizeof(HistEntry)));
         V.nhist--;
     }
     HistEntry *h = V.hist + V.nhist++;

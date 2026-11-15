@@ -41,6 +41,20 @@ void *memcpy(void *dst, void const *src, uz len) {
     return r;
 }
 
+// Overlapping ranges: copy backward when the destination is above the
+// source. GCC also emits calls to this for loops that move bytes.
+void *memmove(void *dst, void const *src, uz len) {
+    u8       *d = dst;
+    u8 const *s = src;
+    if (d<=s || d>=s+len) {
+        return memcpy(dst, src, len);
+    }
+    d += len - 1;
+    s += len - 1;
+    __asm__ volatile ("std; rep movsb; cld" : "+D"(d), "+S"(s), "+c"(len) : : "memory");
+    return dst;
+}
+
 
 // Arena
 
