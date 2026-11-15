@@ -14,7 +14,7 @@ LDLIBS   = -lkernel32 -luser32 -lgdi32 -lole32 -ladvapi32 -lshell32 \
            -lcomdlg32 -ldwmapi -ld2d1 -ldwrite -lwindowscodecs -lgcc
 TESTLIBS = -lkernel32 -lgcc
 # Portable core, then the Windows layer.
-CORE     = base.c platform.h md.c
+CORE     = base.c platform.h md.c mdtables.c
 SRC      = $(CORE) win32.c gfx.c demo.c
 
 md.exe: main.c $(SRC)

@@ -438,6 +438,10 @@ enum {
     PAGE_NOACCESS  = 0x01,
     PAGE_READWRITE = 0x04,
 
+    STD_INPUT_HANDLE  = -10,
+    STD_OUTPUT_HANDLE = -11,
+    STD_ERROR_HANDLE  = -12,
+
     GENERIC_READ          = (i32)0x80000000,
     FILE_SHARE_READ       = 0x0001,
     FILE_SHARE_WRITE      = 0x0002,
@@ -573,6 +577,11 @@ W32(b32)    ReadFile(uptr, u8 *, u32, u32 *, void *);
 W32(b32)    GetFileSizeEx(uptr, i64 *);
 W32(b32)    WriteFile(uptr, u8 const *, u32, u32 *, void *);
 W32(b32)    WriteConsoleW(uptr, c16 const *, u32, u32 *, void *);
+W32(uptr)   GetStdHandle(i32);
+W32(b32)    GetConsoleMode(uptr, u32 *);
+W32(u64)    GetTickCount64(void);
+W32(b32)    QueryPerformanceCounter(i64 *);
+W32(b32)    QueryPerformanceFrequency(i64 *);
 W32(b32)    GetFileAttributesExW(c16 const *, i32, void *);
 W32(b32)    CloseHandle(uptr);
 W32(u32)    GetLastError(void);
