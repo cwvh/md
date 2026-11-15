@@ -858,9 +858,16 @@ static i32 run(Arena all) {
         app_key(KEY_PGDN, 0);
     }
 #endif
+    // Show the window cloaked, paint the first frame, then uncloak, so it
+    // appears with its content instead of a white flash while Direct2D
+    // starts up. Attribute 13 is DWMWA_CLOAK.
     g.ready = 1;
+    b32 cloak = 1;
+    DwmSetWindowAttribute(g.hwnd, 13, &cloak, sizeof(cloak));
     ShowWindow(g.hwnd, SW_SHOW);
-    os_invalidate();
+    UpdateWindow(g.hwnd);
+    cloak = 0;
+    DwmSetWindowAttribute(g.hwnd, 13, &cloak, sizeof(cloak));
 
     Msg m = {0};
     while (GetMessageW(&m, 0, 0, 0) > 0) {

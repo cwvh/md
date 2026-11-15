@@ -620,6 +620,7 @@ W32(iptr)   DefWindowProcW(uptr, u32, uptr, iptr);
 W32(b32)    DestroyWindow(uptr);
 W32(void)   PostQuitMessage(i32);
 W32(b32)    ShowWindow(uptr, i32);
+W32(b32)    UpdateWindow(uptr);
 W32(b32)    GetMessageW(Msg *, uptr, u32, u32);
 W32(b32)    TranslateMessage(Msg const *);
 W32(iptr)   DispatchMessageW(Msg const *);
