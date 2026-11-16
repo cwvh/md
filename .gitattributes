@@ -4,3 +4,4 @@ test/img/gen.py text
 test/images/*.png binary
 test/images/*.gif binary
 test/images/*.jpg binary
+screenshots/*.webp binary
