@@ -789,6 +789,7 @@ W32(b32)    CloseHandle(uptr);
 W32(uptr)   CreateEventW(void *, b32 manual, b32 initial, c16 const *);
 W32(b32)    SetEvent(uptr);
 W32(u32)    WaitForSingleObject(uptr, u32);
+W32(void *) CreateThread(void *, uz, u32 (*)(void *), void *, u32, u32 *);
 W32(u32)    GetLastError(void);
 W32(c16 *)  GetCommandLineW(void);
 W32(uptr)   GetModuleHandleW(c16 const *);

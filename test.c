@@ -64,7 +64,6 @@ typedef struct {
 } ExceptionPointers;
 
 W32(void *) AddVectoredExceptionHandler(u32, i32 (*)(ExceptionPointers *));
-W32(void *) CreateThread(void *, uz, u32 (*)(void *), void *, u32, u32 *);
 W32(void)   Sleep(u32);
 
 

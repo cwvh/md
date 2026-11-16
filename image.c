@@ -107,8 +107,6 @@ static void com_put(void *p) {
 // nothing is dispatched and no call crosses an apartment. The caller's own
 // wait is a plain kernel wait, which dispatches nothing either.
 
-W32(void *) CreateThread(void *, uz, u32 (*)(void *), void *, u32, u32 *);
-
 static struct {
     uptr go;                        // the worker has a job
     uptr done;                      // the job is done
