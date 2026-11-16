@@ -567,9 +567,28 @@ static void check_invariants(Image *im, u64 *s) {
             fail("invariant", "a frame differs when reached another way", f, k);
         }
     }
-    if (os_image_delay(im, -1)>=10 || os_image_delay(im, n)>=10) {
-        // Out of range frames report no delay, or at most the default; both
-        // are fine as long as nothing crashes.
+    if (os_image_delay(im, -1) != 0 || os_image_delay(im, n) != 0) {
+        fail("invariant", "a frame out of range has a delay", n, 0);
+    }
+    // Reduced for drawing small: halved sizes, still valid pixels. An
+    // animation is not reduced at all.
+    i32 level = 5;
+    i32 rw, rh;
+    u32 const *rp = image_reduced(im, &level, &rw, &rh);
+    i32 ew = w;
+    i32 eh = h;
+    for (i32 k = 0; k < level; k++) {
+        ew = (ew + 1)/2;
+        eh = (eh + 1)/2;
+    }
+    if (level != (n > 1 ? 0 : 5) || rw != ew || rh != eh) {
+        fail("invariant", "reduced size", level, (i64)rw*1000 + rh);
+    }
+    for (iz i = 0; i < (iz)rw*rh; i++) {
+        u32 a = rp[i] >> 24;
+        if ((rp[i]>>16 & 255) > a || (rp[i]>>8 & 255) > a || (rp[i] & 255) > a) {
+            fail("invariant", "reduced pixel is not premultiplied", level, (i64)i);
+        }
     }
 }
 
@@ -703,6 +722,74 @@ static void run_refused(Rig *r) {
         }
         r->checks++;
     }
+}
+
+// Pictures halved for drawing small: sizes round up, each pixel is the
+// average of four (the edge ones counting twice when the side is odd).
+static void run_reduced(Rig *r) {
+    ctx.phase = "reduced";
+    Arena a = r->files;
+
+    Image *im = os_image_decode(readimg(r, &a, "icon.ico"));
+    i32 want[] = {32, 16, 8, 4, 2, 1, 1, 1};
+    for (i32 k = 0; k < 8; k++) {
+        i32 level = k, w, h;
+        u32 const *p = image_reduced(im, &level, &w, &h);
+        if (level != k || w != want[k] || h != want[k]) {
+            fail("reduced", "icon size", k, w);
+        }
+        for (i32 i = 0; i < w*h; i++) {
+            if (p[i] != BLUE) {
+                fail("reduced", "a flat picture changed", k, i);
+            }
+        }
+        r->checks++;
+    }
+    image_free(im);
+
+    // 3x3: red green blue / yellow cyan magenta / black gray white
+    im = os_image_decode(readimg(r, &a, "rgb.png"));
+    i32 level = 1, w, h;
+    u32 const *p = image_reduced(im, &level, &w, &h);
+    u32 const want1[] = {ARGB(255,128,191,64), ARGB(255,128,0,255),
+                         ARGB(255,64,64,64),   WHITE};
+    if (level != 1 || w != 2 || h != 2) {
+        fail("reduced", "3x3 size", w, h);
+    }
+    for (i32 i = 0; i < 4; i++) {
+        if (chan_diff(p[i], want1[i]) > 0) {
+            fail_pixel(r, 1, i%2, i/2, p[i], want1[i]);
+        }
+        r->checks++;
+    }
+    level = 2;
+    p = image_reduced(im, &level, &w, &h);
+    if (level != 2 || w != 1 || h != 1 || p[0] != ARGB(255,144,128,160)) {
+        fail_pixel(r, 2, 0, 0, p[0], ARGB(255,144,128,160));
+    }
+    image_free(im);
+
+    // Alpha is averaged premultiplied: 4x2 becomes 2x1
+    im = os_image_decode(readimg(r, &a, "alpha.png"));
+    level = 1;
+    p = image_reduced(im, &level, &w, &h);
+    if (level != 1 || w != 2 || h != 1) {
+        fail("reduced", "alpha size", w, h);
+    }
+    if (chan_diff(p[0], ARGB(144,80,32,32)) > 1) {
+        fail_pixel(r, 1, 0, 0, p[0], ARGB(144,80,32,32));
+    }
+    image_free(im);
+
+    // An animation stays as it is
+    im = os_image_decode(readimg(r, &a, "keep.gif"));
+    level = 3;
+    image_reduced(im, &level, &w, &h);
+    if (level != 0 || w != 8 || h != 8) {
+        fail("reduced", "an animation was reduced", level, w);
+    }
+    image_free(im);
+    r->checks += 4;
 }
 
 // WebP depends on the codec the system has. If it decodes, it must do so
@@ -1108,6 +1195,7 @@ static i32 run(Arena all) {
         }
         run_orientation(&r);
         run_refused(&r);
+        run_reduced(&r);
         run_webp(&r);
         ctx.phase = 0;
         print(o, S("files: ok, "));

@@ -14,6 +14,7 @@ enum {
     IMG_MAX_BYTES   = 128<<20,      // one canvas
     IMG_MAX_FRAMES  = 10000,
     IMG_BAND        = 16384,        // pixels per CopyPixels call, at most
+    IMG_LEVELS      = 8,            // an image can be halved this many times
 };
 
 // Disposal methods of the GIF graphic control extension
@@ -44,10 +45,15 @@ struct Image {
     WicDecoder *dec;
     GifFrame  *fr;                  // nframes entries
 
+    u32 *reduced[IMG_LEVELS];       // [k] is the image halved k times, made when
+                                    //   asked for; [0] is not used
+
     // For gfx.c, which creates and frees it
     void *bitmap;
     u32   bgen;
     u32   bserial;
+    i32   bwant;                    // the level asked for when it was made
+    i32   blevel;                   // and the one it got
 };
 
 // Live allocations, for the leak checks of the tests: heap blocks, and COM
@@ -185,6 +191,9 @@ static void image_unload(Image *im) {
 static void image_drop(Image *im) {
     if (im) {
         image_unload(im);
+        for (i32 k = 0; k < IMG_LEVELS; k++) {
+            img_free(im->reduced[k]);
+        }
         img_free(im->canvas);
         img_free(im->saved);
         img_free(im);
@@ -637,6 +646,60 @@ static u32 const *image_pixels(Image *im, i32 frame) {
         on_worker(job_seek, &j);
     }
     return im->canvas;
+}
+
+// Half the size, rounding up, each pixel the average of the four it covers
+// (the edge ones count twice when the side is odd).
+static void halve(u32 const *s, i32 w, i32 h, u32 *d) {
+    i32 nw = (w + 1)/2;
+    i32 nh = (h + 1)/2;
+    for (i32 y = 0; y < nh; y++) {
+        u32 const *r0 = s + (iz)(2*y)*w;
+        u32 const *r1 = s + (iz)min(2*y + 1, h - 1)*w;
+        for (i32 x = 0; x < nw; x++) {
+            i32 x0 = 2*x;
+            i32 x1 = min(x0 + 1, w - 1);
+            u32 p[4] = {r0[x0], r0[x1], r1[x0], r1[x1]};
+            u32 c = 0;
+            for (i32 sh = 0; sh < 32; sh += 8) {
+                u32 sum = ((p[0]>>sh) & 255) + ((p[1]>>sh) & 255) +
+                          ((p[2]>>sh) & 255) + ((p[3]>>sh) & 255);
+                c |= ((sum + 2)/4) << sh;
+            }
+            d[(iz)y*nw + x] = c;
+        }
+    }
+}
+
+// The pixels of a still image halved level times, for drawing it much
+// smaller than it is: scaling down by more than two with a bilinear filter
+// skips pixels and shimmers. Takes the level wanted and gives the level it
+// got (an animation is never reduced) and the size at that level. Valid as
+// long as the image.
+static u32 const *image_reduced(Image *im, i32 *level, i32 *w, i32 *h) {
+    u32 const *p = im->canvas;
+    i32 pw  = im->w;
+    i32 ph  = im->h;
+    i32 got = 0;
+    for (i32 k = 1; !im->fr && k <= *level && k < IMG_LEVELS; k++) {
+        i32 nw = (pw + 1)/2;
+        i32 nh = (ph + 1)/2;
+        if (!im->reduced[k]) {
+            im->reduced[k] = img_alloc((iz)nw*nh, 4);
+            if (!im->reduced[k]) {
+                break;
+            }
+            halve(p, pw, ph, im->reduced[k]);
+        }
+        p   = im->reduced[k];
+        pw  = nw;
+        ph  = nh;
+        got = k;
+    }
+    *level = got;
+    *w     = pw;
+    *h     = ph;
+    return p;
 }
 
 // Everything but the bitmap, which gfx.c takes care of first.
