@@ -835,7 +835,6 @@ W32(b32)    OpenClipboard(uptr);
 W32(b32)    EmptyClipboard(void);
 W32(uptr)   SetClipboardData(u32, uptr);
 W32(b32)    CloseClipboard(void);
-W32(uptr)   GetClipboardData(u32);
 
 W32(uptr)   ShellExecuteW(uptr, c16 const *, c16 const *, c16 const *, c16 const *, i32);
 W32(void)   DragAcceptFiles(uptr, b32);
@@ -851,5 +850,6 @@ W32(i32)    CoCreateInstance(Guid const *, void *, u32, Guid const *, void **);
 W32(i32)    PropVariantClear(PropVar *);
 W32(i32)    D2D1CreateFactory(u32, Guid const *, void const *, void **);
 W32(i32)    DWriteCreateFactory(u32, Guid const *, void **);
+W32(uptr)   GetClipboardData(u32);
 
 #endif

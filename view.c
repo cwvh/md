@@ -1326,6 +1326,9 @@ static void app_mouse_down(Point p, Button b, u32 mods) {
         V.down_cell = h.cell;
         V.down_link = h.th.link;
     }
+    if (!D.nleaves) {
+        return;
+    }
     // Start a selection, or extend the last one, or select a line.
     Work w;
     work_init(&w);
@@ -1400,6 +1403,9 @@ static void app_double_click(Point p, u32 mods) {
         os_invalidate();
         return;
     }
+    if (!D.nleaves) {
+        return;
+    }
     Work w;
     work_init(&w);
     b32    right;
@@ -1466,6 +1472,9 @@ static void app_wheel(Point p, f32 dx, f32 dy, u32 mods) {
         return;
     }
     scroll_by(-dy * 3 * line_body * V.zoom);
+    if (V.sel.down && V.sel.moved && V.state == VS_DOC) {
+        sel_drag_to(V.mouse);       // what is under the mouse changed
+    }
 }
 
 
@@ -1519,12 +1528,7 @@ static void app_key(Key key, u32 mods) {
         return;
     }
     switch (key) {
-    case KEY_F3:
-        find_open();
-        if (V.find.open && V.find.len && !V.find.have) {
-            find_run(0, 1);
-        }
-        break;
+    case KEY_F3:    find_open(); break;
     case KEY_ESCAPE: sel_clear(); break;
     case KEY_UP:    scroll_by(-line); break;
     case KEY_DOWN:  scroll_by(line); break;

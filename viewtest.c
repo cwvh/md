@@ -2173,6 +2173,43 @@ static void test_texts(void) {
     CHECK(fk.live_paras == 0, "leak");
 }
 
+// Nothing to select, copy or find, and no crash.
+static void test_sel_empty(void) {
+    ctx.phase = "sel-empty";
+    rig_reset();
+    put_s("/e/empty.md", "");
+    put_s("/e/comment.md", "<!-- nothing to see -->\n");
+    put_s("/e/rule.md", "---\n");
+    char const *const paths[] = {"/e/empty.md", "/e/comment.md", "/e/rule.md"};
+    for (i32 i = 0; i < 3; i++) {
+        start(paths[i], 600, 400);
+        paint();
+        CHECK(V.state == VS_DOC, "loaded");
+        Point p = {100, 100};
+        click_at(p, 0);
+        click_at(p, MOD_SHIFT);
+        dbl_click(p);
+        fk.now += 100;
+        app_mouse_down(p, BUTTON_LEFT, 0);
+        app_mouse_move((Point){300, 500}, 0);
+        app_timer(SEL_TIMER);
+        app_mouse_up((Point){300, 500}, BUTTON_LEFT, 0);
+        key(KEY_A, MOD_PRIMARY);
+        fk.clipset = 0;
+        key(KEY_C, MOD_PRIMARY);
+        CHECK(!fk.clipset || clip().len == 0, "nothing was copied");
+        key(KEY_F, MOD_PRIMARY);
+        type_text("x");
+        CHECK(V.find.open && V.find.total == 0, "nothing found");
+        key(KEY_ENTER, 0);
+        key(KEY_ESCAPE, 0);
+        paint();
+        check_state();
+        app_close();
+        CHECK(fk.live_paras == 0, "leak");
+    }
+}
+
 static void test_all(void) {
     test_layout();
     test_theme();
@@ -2191,6 +2228,7 @@ static void test_all(void) {
     test_sel_images();
     test_sel_scroll();
     test_find();
+    test_sel_empty();
 }
 
 

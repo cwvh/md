@@ -42,11 +42,13 @@ static struct {
     u32      dpi;               // window DPI, 96 at scale 1
     b32      ready;             // app_init has run
     b32      tracking;          // a mouse leave notification is pending
+    b32      lbutton;           // the app has seen the left button go down and not up
     b32      dark;
     i32      darkforce;         // debug builds: 1 dark, 2 light, 0 system
     i32      zoomsteps;         // debug builds: keys to press after start up, for
     i32      pagedowns;         //   screenshots without typing into someone's window
     Str      findtext;          // debug builds: open find and type this
+    Str      selfrom, selto;    // debug builds: select from the first match of one text to the end of another's
     b32      selectall;         // debug builds: select everything
     b32      copy;              // debug builds: and copy it
     b32      dragging;          // debug builds: drag a selection from p0 to p1
@@ -447,6 +449,7 @@ static struct {
     i64 freq, start, init;
     i64 paint;              // time in the app's paint, the last frame
     Str name;
+    Str find;               // --bench-find: also time a search for this
 } bench;
 
 static i64 bench_now(void) {
@@ -512,6 +515,61 @@ static void bench_report(i64 first) {
     print(o, S(" us, worst "));
     printi64(o, worst);
     print(o, S(" us (app_paint only)\n"));
+    // Search for a word key by key: the first key makes the text of every leaf.
+    app_key(KEY_HOME, 0);
+    gfx_paint(draw_frame);
+    if (bench.find.len) {
+        app_key(KEY_F, MOD_PRIMARY);
+        i64 worst_key = 0, first_key = 0;
+        for (iz i = 0; i < bench.find.len; i++) {
+            i64 a = bench_now();
+            app_char(bench.find.data[i]);
+            gfx_paint(draw_frame);
+            i64 d = bench_us(a, bench_now());
+            if (i == 0) {
+                first_key = d;
+            } else {
+                worst_key = max(worst_key, d);
+            }
+        }
+        i64 step = 0;
+        for (i32 i = 0; i < 20; i++) {
+            i64 a = bench_now();
+            app_key(KEY_ENTER, 0);
+            gfx_paint(draw_frame);
+            step = max(step, bench_us(a, bench_now()));
+        }
+        print(o, S("  find \""));
+        print(o, bench.find);
+        print(o, S("\": "));
+        printi64(o, V.find.total);
+        print(o, S(" matches; first key (with all the text, and a paint) "));
+        printi64(o, first_key);
+        print(o, S(" us, next keys worst "));
+        printi64(o, worst_key);
+        print(o, S(" us, next match worst "));
+        printi64(o, step);
+        print(o, S(" us (each with a paint)\n"));
+    }
+    // Select everything and copy it, from a freshly loaded document (this replaces
+    // the clipboard).
+    app_key(KEY_ESCAPE, 0);
+    app_key(KEY_R, MOD_PRIMARY);
+    gfx_paint(draw_frame);
+    app_key(KEY_HOME, 0);
+    gfx_paint(draw_frame);
+    i64 t0 = bench_now();
+    app_key(KEY_A, MOD_PRIMARY);
+    gfx_paint(draw_frame);
+    i64 t1 = bench_now();
+    app_key(KEY_C, MOD_PRIMARY);
+    i64 t2 = bench_now();
+    print(o, S("  select all "));
+    printi64(o, bench_us(t0, t1));
+    print(o, S(" us (with a paint), copy (making all the text, and the clipboard) "));
+    printi64(o, bench_us(t1, t2));
+    print(o, S(" us\n"));
+    app_key(KEY_ESCAPE, 0);
     flush(o);
     CloseHandle(f);
     os_quit();
@@ -654,6 +712,10 @@ static iptr wndproc(uptr hwnd, u32 msg, uptr wp, iptr lp) {
             g.tracking = TrackMouseEvent(&tm);
         }
         if (g.ready) {
+            if (g.lbutton && !(wp & 1)) {       // MK_LBUTTON: let go where we did not see it
+                g.lbutton = 0;
+                app_mouse_up(mousepos(lp), BUTTON_LEFT, currentmods());
+            }
             app_mouse_move(mousepos(lp), currentmods());
         }
         return 0;
@@ -672,6 +734,7 @@ static iptr wndproc(uptr hwnd, u32 msg, uptr wp, iptr lp) {
         if (g.ready) {
             Button b = msg==WM_LBUTTONDOWN ? BUTTON_LEFT :
                        msg==WM_RBUTTONDOWN ? BUTTON_RIGHT : BUTTON_MIDDLE;
+            g.lbutton = g.lbutton || b==BUTTON_LEFT;
             app_mouse_down(mousepos(lp), b, currentmods());
         }
         return 0;
@@ -683,12 +746,14 @@ static iptr wndproc(uptr hwnd, u32 msg, uptr wp, iptr lp) {
         if (g.ready) {
             Button b = msg==WM_LBUTTONUP ? BUTTON_LEFT :
                        msg==WM_RBUTTONUP ? BUTTON_RIGHT : BUTTON_MIDDLE;
+            g.lbutton = g.lbutton && b!=BUTTON_LEFT;
             app_mouse_up(mousepos(lp), b, currentmods());
         }
         return 0;
 
     case WM_LBUTTONDBLCLK:
         SetCapture(hwnd);
+        g.lbutton = 1;
         if (g.ready) {
             app_double_click(mousepos(lp), currentmods());
         }
@@ -833,6 +898,12 @@ static i32 run(Arena all) {
         } else if (equals(args.argv[i], S("--find")) && i+1 < args.argc) {
             g.findtext = args.argv[++i];                // then search for this
             continue;
+        } else if (equals(args.argv[i], S("--select-from")) && i+1 < args.argc) {
+            g.selfrom = args.argv[++i];
+            continue;
+        } else if (equals(args.argv[i], S("--select-to")) && i+1 < args.argc) {
+            g.selto = args.argv[++i];
+            continue;
         } else if (equals(args.argv[i], S("--select-all"))) {
             g.selectall = 1;
             continue;
@@ -861,6 +932,9 @@ static i32 run(Arena all) {
 #ifdef BENCHMARK
         if (equals(args.argv[i], S("--bench"))) {
             bench.on = 1;
+            continue;
+        } else if (equals(args.argv[i], S("--bench-find")) && i+1 < args.argc) {
+            bench.find = args.argv[++i];
             continue;
         }
 #endif
@@ -949,6 +1023,21 @@ static i32 run(Arena all) {
         app_mouse_move((Point){(a.x + b.x)/2, (a.y + b.y)/2}, 0);
         app_mouse_move(b, 0);
         app_mouse_up(b, BUTTON_LEFT, 0);
+    }
+    if (g.selfrom.len && g.selto.len && V.state == VS_DOC && D.nleaves) {
+        u8 fa[FIND_MAX], fb[FIND_MAX];
+        Str a = {fa, min(g.selfrom.len, (iz)FIND_MAX)}, b = {fb, min(g.selto.len, (iz)FIND_MAX)};
+        fold_text(fa, (Str){g.selfrom.data, a.len});
+        fold_text(fb, (Str){g.selto.data, b.len});
+        Arena tmp = V.tmp;
+        RB    rb;
+        rb_init(&rb, &tmp);
+        FindScan x = doc_find_scan(a, pos_first(0), 0, &rb);
+        FindScan y = doc_find_scan(b, x.pos, 0, &rb);
+        if (x.n && y.n) {
+            y.pos.off += b.len;
+            sel_set(x.pos, y.pos);
+        }
     }
     if (g.selectall) {
         app_key(KEY_A, MOD_PRIMARY);
