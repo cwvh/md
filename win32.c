@@ -36,6 +36,12 @@ static const Guid iid_unknown          = {0x00000000, 0x0000, 0x0000, {0xc0,0x00
 static const Guid iid_d2d_factory      = {0x06152247, 0x6f50, 0x465a, {0x92,0x45,0x11,0x8b,0xfd,0x3b,0x60,0x07}};
 static const Guid iid_dw_factory    = {0xb859ee5a, 0xd838, 0x4b5b, {0xa2,0xe8,0x1a,0xdc,0x7d,0x93,0xdb,0x48}};
 static const Guid iid_dw_inline = {0x8339fde3, 0x106f, 0x47ab, {0x83,0x73,0x1c,0x62,0x95,0xeb,0x10,0xb3}};
+static const Guid clsid_wic_factory = {0xcacaf262, 0x9370, 0x4615, {0xa1,0x3b,0x9f,0x55,0x39,0xda,0x4c,0x0a}};
+static const Guid iid_wic_factory   = {0xec5ec8a9, 0xc395, 0x4314, {0x9c,0x77,0x54,0xd7,0xa9,0x35,0xff,0x70}};
+static const Guid wic_pbgra       = {0x6fddc324, 0x4e03, 0x4bfe, {0xb1,0x85,0x3d,0x77,0x76,0x8d,0xc9,0x10}};
+static const Guid wic_gif           = {0x1f8a5601, 0x7d4d, 0x4cbd, {0x9c,0x82,0x1b,0xc8,0xd4,0xee,0xb9,0xa5}};
+static const Guid wic_jpeg          = {0x19e4a5aa, 0x5662, 0x4fc5, {0xa0,0xc0,0x17,0x58,0x02,0x8e,0x10,0x57}};
+static const Guid wic_ico           = {0xa3a860c4, 0x338f, 0x4c17, {0x91,0x9a,0xfb,0xa4,0xb5,0x62,0x8f,0x21}};
 
 
 // Plain Win32 structs. Handles are uptr, LPARAM/LRESULT are iptr.
@@ -169,6 +175,34 @@ typedef struct {
     D2dMatrix transform;
 } D2dBrushProps;
 
+typedef struct {
+    D2dPixelFormat pixelformat;
+    f32            dpix;
+    f32            dpiy;
+} D2dBitmapProps;
+
+
+// WIC structs
+
+typedef struct { i32 x, y, w, h; } WicRect;
+
+// PROPVARIANT, the metadata values WIC hands back. Only the integer members
+// are named; the union is 16 bytes (two pointers) in the official layout.
+typedef struct {
+    u16 vt;
+    u16 reserved1;
+    u16 reserved2;
+    u16 reserved3;
+    union {
+        u8   b;         // VT_UI1
+        i16  i;         // VT_I2 and VT_BOOL
+        u16  w;         // VT_UI2
+        u32  u;         // VT_UI4
+        i32  l;         // VT_I4
+        void *p[2];
+    };
+} PropVar;
+
 
 // DirectWrite structs
 
@@ -259,7 +293,8 @@ typedef struct { D2dRtVtbl const *v; } D2dRt;
 struct D2dRtVtbl {
     UnknownVtbl base;
     void *GetFactory;
-    void *CreateBitmap;
+    i32 (*CreateBitmap)(D2dRt *, D2dSizeU, void const *pixels, u32 pitch,
+            D2dBitmapProps const *, void **);
     void *CreateBitmapFromWicBitmap;
     void *CreateSharedBitmap;
     void *CreateBitmapBrush;
@@ -434,6 +469,141 @@ struct DwInlineVtbl {
     i32 (*GetBreakConditions)(DwInline *, u32 *before, u32 *after);
 };
 
+// ID2D1Bitmap, which is an ID2D1Image and an ID2D1Resource (GetFactory).
+// Only CopyFromMemory is called.
+typedef struct D2dBitmapVtbl D2dBitmapVtbl;
+typedef struct { D2dBitmapVtbl const *v; } D2dBitmap;
+struct D2dBitmapVtbl {
+    UnknownVtbl base;
+    void *GetFactory;
+    void *GetSize;              // returns a struct
+    void *GetPixelSize;         // returns a struct
+    void *GetPixelFormat;       // returns a struct
+    void *GetDpi;
+    void *CopyFromBitmap;
+    void *CopyFromRenderTarget;
+    i32 (*CopyFromMemory)(D2dBitmap *, void const *rect, void const *pixels, u32 pitch);
+};
+
+// The Windows Imaging Component (image decoding). The official C vtables
+// repeat the slots of the interfaces they derive from, and so do these.
+
+// IWICImagingFactory: slots 3..27
+typedef struct WicFactoryVtbl WicFactoryVtbl;
+typedef struct { WicFactoryVtbl const *v; } WicFactory;
+struct WicFactoryVtbl {
+    UnknownVtbl base;
+    void *CreateDecoderFromFilename;
+    i32 (*CreateDecoderFromStream)(WicFactory *, void *stream, Guid const *vendor,
+            u32 cacheoption, void **);
+    void *CreateDecoderFromFileHandle;
+    void *CreateComponentInfo;
+    void *CreateDecoder;
+    void *CreateEncoder;
+    void *CreatePalette;
+    i32 (*CreateFormatConverter)(WicFactory *, void **);
+    void *CreateBitmapScaler;
+    void *CreateBitmapClipper;
+    void *CreateBitmapFlipRotator;
+    i32 (*CreateStream)(WicFactory *, void **);
+    void *CreateColorContext;
+    void *CreateColorTransformer;
+    void *CreateBitmap;
+    void *CreateBitmapFromSource;
+    void *CreateBitmapFromSourceRect;
+    void *CreateBitmapFromMemory;
+    void *CreateBitmapFromHBITMAP;
+    void *CreateBitmapFromHICON;
+    void *CreateComponentEnumerator;
+    void *CreateFastMetadataEncoderFromDecoder;
+    void *CreateFastMetadataEncoderFromFrameDecode;
+    void *CreateQueryWriter;
+    void *CreateQueryWriterFromReader;
+};
+
+// IWICStream: IUnknown, ISequentialStream, IStream, then its own
+typedef struct WicStreamVtbl WicStreamVtbl;
+typedef struct { WicStreamVtbl const *v; } WicStream;
+struct WicStreamVtbl {
+    UnknownVtbl base;
+    void *Read;
+    void *Write;
+    void *Seek;
+    void *SetSize;
+    void *CopyTo;
+    void *Commit;
+    void *Revert;
+    void *LockRegion;
+    void *UnlockRegion;
+    void *Stat;
+    void *Clone;
+    void *InitializeFromIStream;
+    void *InitializeFromFilename;
+    i32 (*InitializeFromMemory)(WicStream *, u8 const *, u32 size);
+    void *InitializeFromIStreamRegion;
+};
+
+// IWICMetadataQueryReader
+typedef struct WicQueryVtbl WicQueryVtbl;
+typedef struct { WicQueryVtbl const *v; } WicQuery;
+struct WicQueryVtbl {
+    UnknownVtbl base;
+    void *GetContainerFormat;
+    void *GetLocation;
+    i32 (*GetMetadataByName)(WicQuery *, c16 const *name, PropVar *);
+    void *GetEnumerator;
+};
+
+// IWICBitmapFrameDecode, which is an IWICBitmapSource: the five slots after
+// IUnknown are the same in IWICFormatConverter, so either serves as the
+// source argument of another converter.
+typedef struct WicFrameVtbl WicFrameVtbl;
+typedef struct { WicFrameVtbl const *v; } WicFrame;
+struct WicFrameVtbl {
+    UnknownVtbl base;
+    i32 (*GetSize)(WicFrame *, u32 *w, u32 *h);
+    void *GetPixelFormat;
+    void *GetResolution;
+    void *CopyPalette;
+    i32 (*CopyPixels)(WicFrame *, WicRect const *, u32 stride, u32 size, u8 *);
+    i32 (*GetMetadataQueryReader)(WicFrame *, void **);
+    void *GetColorContexts;
+    void *GetThumbnail;
+};
+
+// IWICFormatConverter
+typedef struct WicConverterVtbl WicConverterVtbl;
+typedef struct { WicConverterVtbl const *v; } WicConverter;
+struct WicConverterVtbl {
+    UnknownVtbl base;
+    i32 (*GetSize)(WicConverter *, u32 *w, u32 *h);
+    void *GetPixelFormat;
+    void *GetResolution;
+    void *CopyPalette;
+    i32 (*CopyPixels)(WicConverter *, WicRect const *, u32 stride, u32 size, u8 *);
+    i32 (*Initialize)(WicConverter *, void *source, Guid const *format, u32 dither,
+            void *palette, f64 threshold, u32 palettetype);
+    void *CanConvert;
+};
+
+// IWICBitmapDecoder
+typedef struct WicDecoderVtbl WicDecoderVtbl;
+typedef struct { WicDecoderVtbl const *v; } WicDecoder;
+struct WicDecoderVtbl {
+    UnknownVtbl base;
+    void *QueryCapability;
+    void *Initialize;
+    i32 (*GetContainerFormat)(WicDecoder *, Guid *);
+    void *GetDecoderInfo;
+    void *CopyPalette;
+    i32 (*GetMetadataQueryReader)(WicDecoder *, void **);
+    void *GetPreview;
+    void *GetColorContexts;
+    void *GetThumbnail;
+    i32 (*GetFrameCount)(WicDecoder *, u32 *);
+    i32 (*GetFrame)(WicDecoder *, u32 index, void **);
+};
+
 #ifndef COMCHECK
 
 #define W32(r) __declspec(dllimport) r
@@ -542,6 +712,20 @@ enum {
     // Registry
     KEY_READ = 0x20019,
 
+    // COM and the Windows Imaging Component
+    CLSCTX_INPROC_SERVER = 1,
+    COINIT_MULTITHREADED = 0,
+    COINIT_APARTMENTTHREADED = 2,
+    WICDecodeMetadataCacheOnDemand = 0,
+    WICBitmapDitherTypeNone = 0,
+    WICBitmapPaletteTypeCustom = 0,
+    VT_I2   = 2,
+    VT_I4   = 3,
+    VT_BOOL = 11,
+    VT_UI1  = 17,
+    VT_UI2  = 18,
+    VT_UI4  = 19,
+
     // OPENFILENAME
     OFN_FILEMUSTEXIST = 0x1000,
     OFN_PATHMUSTEXIST = 0x0800,
@@ -553,6 +737,8 @@ enum {
     D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT = 4,
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE = 0,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR = 1,
+    D2D1_ALPHA_MODE_PREMULTIPLIED = 1,
+    DXGI_FORMAT_B8G8R8A8_UNORM = 87,
     DWRITE_FACTORY_TYPE_SHARED = 0,
     DWRITE_FONT_WEIGHT_NORMAL = 400,
     DWRITE_FONT_WEIGHT_BOLD = 700,
@@ -600,6 +786,9 @@ W32(b32)    QueryPerformanceCounter(i64 *);
 W32(b32)    QueryPerformanceFrequency(i64 *);
 W32(b32)    GetFileAttributesExW(c16 const *, i32, void *);
 W32(b32)    CloseHandle(uptr);
+W32(uptr)   CreateEventW(void *, b32 manual, b32 initial, c16 const *);
+W32(b32)    SetEvent(uptr);
+W32(u32)    WaitForSingleObject(uptr, u32);
 W32(u32)    GetLastError(void);
 W32(c16 *)  GetCommandLineW(void);
 W32(uptr)   GetModuleHandleW(c16 const *);
@@ -655,6 +844,9 @@ W32(i32)    RegOpenKeyExW(uptr, c16 const *, u32, u32, uptr *);
 W32(i32)    RegQueryValueExW(uptr, c16 const *, void *, u32 *, void *, u32 *);
 W32(i32)    RegCloseKey(uptr);
 W32(i32)    DwmSetWindowAttribute(uptr, u32, void const *, u32);
+W32(i32)    CoInitializeEx(void *, u32);
+W32(i32)    CoCreateInstance(Guid const *, void *, u32, Guid const *, void **);
+W32(i32)    PropVariantClear(PropVar *);
 W32(i32)    D2D1CreateFactory(u32, Guid const *, void const *, void **);
 W32(i32)    DWriteCreateFactory(u32, Guid const *, void **);
 

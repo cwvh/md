@@ -26,6 +26,7 @@
 #include <windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
+#include <wincodec.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -167,6 +168,83 @@ I(Draw); I(GetMetrics); I(GetOverhangMetrics); I(GetBreakConditions);
 LAST(DwInlineVtbl, IDWriteInlineObjectVtbl, GetBreakConditions);
 #undef I
 
+// ID2D1Bitmap: ID2D1Resource, ID2D1Image, then its own slots.
+#define B(m) SLOT(D2dBitmapVtbl, ID2D1BitmapVtbl, m, m)
+SLOT(D2dBitmapVtbl, ID2D1BitmapVtbl, base.QueryInterface, Base.Base.Base.QueryInterface);
+SLOT(D2dBitmapVtbl, ID2D1BitmapVtbl, base.AddRef, Base.Base.Base.AddRef);
+SLOT(D2dBitmapVtbl, ID2D1BitmapVtbl, base.Release, Base.Base.Base.Release);
+SLOT(D2dBitmapVtbl, ID2D1BitmapVtbl, GetFactory, Base.Base.GetFactory);
+B(GetSize); B(GetPixelSize); B(GetPixelFormat); B(GetDpi); B(CopyFromBitmap);
+B(CopyFromRenderTarget); B(CopyFromMemory);
+LAST(D2dBitmapVtbl, ID2D1BitmapVtbl, CopyFromMemory);
+#undef B
+
+// The WIC vtables are flat in the official header.
+#define WI(ours, theirs) \
+    SLOT(ours, theirs, base.QueryInterface, QueryInterface); \
+    SLOT(ours, theirs, base.AddRef, AddRef); \
+    SLOT(ours, theirs, base.Release, Release)
+
+// IWICImagingFactory
+#define M(m) SAME(WicFactoryVtbl, IWICImagingFactoryVtbl, m)
+WI(WicFactoryVtbl, IWICImagingFactoryVtbl);
+M(CreateDecoderFromFilename); M(CreateDecoderFromStream); M(CreateDecoderFromFileHandle);
+M(CreateComponentInfo); M(CreateDecoder); M(CreateEncoder); M(CreatePalette);
+M(CreateFormatConverter); M(CreateBitmapScaler); M(CreateBitmapClipper);
+M(CreateBitmapFlipRotator); M(CreateStream); M(CreateColorContext);
+M(CreateColorTransformer); M(CreateBitmap); M(CreateBitmapFromSource);
+M(CreateBitmapFromSourceRect); M(CreateBitmapFromMemory); M(CreateBitmapFromHBITMAP);
+M(CreateBitmapFromHICON); M(CreateComponentEnumerator);
+M(CreateFastMetadataEncoderFromDecoder); M(CreateFastMetadataEncoderFromFrameDecode);
+M(CreateQueryWriter); M(CreateQueryWriterFromReader);
+LAST(WicFactoryVtbl, IWICImagingFactoryVtbl, CreateQueryWriterFromReader);
+#undef M
+
+// IWICStream
+#define M(m) SAME(WicStreamVtbl, IWICStreamVtbl, m)
+WI(WicStreamVtbl, IWICStreamVtbl);
+M(Read); M(Write); M(Seek); M(SetSize); M(CopyTo); M(Commit); M(Revert);
+M(LockRegion); M(UnlockRegion); M(Stat); M(Clone); M(InitializeFromIStream);
+M(InitializeFromFilename); M(InitializeFromMemory); M(InitializeFromIStreamRegion);
+LAST(WicStreamVtbl, IWICStreamVtbl, InitializeFromIStreamRegion);
+#undef M
+
+// IWICMetadataQueryReader
+#define M(m) SAME(WicQueryVtbl, IWICMetadataQueryReaderVtbl, m)
+WI(WicQueryVtbl, IWICMetadataQueryReaderVtbl);
+M(GetContainerFormat); M(GetLocation); M(GetMetadataByName); M(GetEnumerator);
+LAST(WicQueryVtbl, IWICMetadataQueryReaderVtbl, GetEnumerator);
+#undef M
+
+// IWICBitmapFrameDecode
+#define M(m) SAME(WicFrameVtbl, IWICBitmapFrameDecodeVtbl, m)
+WI(WicFrameVtbl, IWICBitmapFrameDecodeVtbl);
+M(GetSize); M(GetPixelFormat); M(GetResolution); M(CopyPalette); M(CopyPixels);
+M(GetMetadataQueryReader); M(GetColorContexts); M(GetThumbnail);
+LAST(WicFrameVtbl, IWICBitmapFrameDecodeVtbl, GetThumbnail);
+#undef M
+
+// IWICFormatConverter. Its source slots must also match the frame's, since
+// a converter and a frame are both used as an IWICBitmapSource.
+#define M(m) SAME(WicConverterVtbl, IWICFormatConverterVtbl, m)
+WI(WicConverterVtbl, IWICFormatConverterVtbl);
+M(GetSize); M(GetPixelFormat); M(GetResolution); M(CopyPalette); M(CopyPixels);
+M(Initialize); M(CanConvert);
+LAST(WicConverterVtbl, IWICFormatConverterVtbl, CanConvert);
+#undef M
+SLOT(WicConverterVtbl, IWICBitmapFrameDecodeVtbl, GetSize, GetSize);
+SLOT(WicConverterVtbl, IWICBitmapFrameDecodeVtbl, CopyPixels, CopyPixels);
+
+// IWICBitmapDecoder
+#define M(m) SAME(WicDecoderVtbl, IWICBitmapDecoderVtbl, m)
+WI(WicDecoderVtbl, IWICBitmapDecoderVtbl);
+M(QueryCapability); M(Initialize); M(GetContainerFormat); M(GetDecoderInfo);
+M(CopyPalette); M(GetMetadataQueryReader); M(GetPreview); M(GetColorContexts);
+M(GetThumbnail); M(GetFrameCount); M(GetFrame);
+LAST(WicDecoderVtbl, IWICBitmapDecoderVtbl, GetFrame);
+#undef M
+#undef WI
+
 // Structs: total size, then every field offset.
 SIZE(Guid, GUID);
 SLOT(Guid, GUID, a, Data1);
@@ -284,6 +362,26 @@ SIZE(D2dBrushProps, D2D1_BRUSH_PROPERTIES);
 SAME(D2dBrushProps, D2D1_BRUSH_PROPERTIES, opacity);
 SLOT(D2dBrushProps, D2D1_BRUSH_PROPERTIES, transform, transform);
 
+SIZE(D2dBitmapProps, D2D1_BITMAP_PROPERTIES);
+SLOT(D2dBitmapProps, D2D1_BITMAP_PROPERTIES, pixelformat, pixelFormat);
+SLOT(D2dBitmapProps, D2D1_BITMAP_PROPERTIES, dpix, dpiX);
+SLOT(D2dBitmapProps, D2D1_BITMAP_PROPERTIES, dpiy, dpiY);
+
+SIZE(WicRect, WICRect);
+SLOT(WicRect, WICRect, x, X); SLOT(WicRect, WICRect, y, Y);
+SLOT(WicRect, WICRect, w, Width); SLOT(WicRect, WICRect, h, Height);
+SIZE(PropVar, PROPVARIANT);
+SAME(PropVar, PROPVARIANT, vt);
+SLOT(PropVar, PROPVARIANT, reserved1, wReserved1);
+SLOT(PropVar, PROPVARIANT, reserved2, wReserved2);
+SLOT(PropVar, PROPVARIANT, reserved3, wReserved3);
+SLOT(PropVar, PROPVARIANT, b, bVal);
+SLOT(PropVar, PROPVARIANT, i, iVal);
+SLOT(PropVar, PROPVARIANT, i, boolVal);
+SLOT(PropVar, PROPVARIANT, w, uiVal);
+SLOT(PropVar, PROPVARIANT, u, ulVal);
+SLOT(PropVar, PROPVARIANT, l, lVal);
+
 SIZE(DwTextRange, DWRITE_TEXT_RANGE);
 SLOT(DwTextRange, DWRITE_TEXT_RANGE, start, startPosition);
 SAME(DwTextRange, DWRITE_TEXT_RANGE, length);
@@ -343,6 +441,12 @@ int main(void) {
     guid("IID_ID2D1Factory",       &iid_d2d_factory,  &IID_ID2D1Factory);
     guid("IID_IDWriteFactory",     &iid_dw_factory,   &IID_IDWriteFactory);
     guid("IID_IDWriteInlineObject", &iid_dw_inline,   &IID_IDWriteInlineObject);
+    guid("CLSID_WICImagingFactory", &clsid_wic_factory, &CLSID_WICImagingFactory);
+    guid("IID_IWICImagingFactory",  &iid_wic_factory, &IID_IWICImagingFactory);
+    guid("GUID_WICPixelFormat32bppPBGRA", &wic_pbgra, &GUID_WICPixelFormat32bppPBGRA);
+    guid("GUID_ContainerFormatGif",  &wic_gif,        &GUID_ContainerFormatGif);
+    guid("GUID_ContainerFormatJpeg", &wic_jpeg,       &GUID_ContainerFormatJpeg);
+    guid("GUID_ContainerFormatIco",  &wic_ico,        &GUID_ContainerFormatIco);
     if (!failures) {
         puts("comcheck: layout and GUIDs ok");
     }
