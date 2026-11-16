@@ -90,7 +90,7 @@ static b32 chance(u64 *s, u64 percent) {
 }
 
 // Index chosen with the given relative weights.
-static i32 weighted(u64 *s, i32 const *w, i32 n) {
+static i32 weighted(u64 *s, const i32 *w, i32 n) {
     i32 total = 0;
     for (i32 i = 0; i < n; i++) {
         total += w[i];
@@ -111,7 +111,7 @@ static i32 weighted(u64 *s, i32 const *w, i32 n) {
 typedef struct {
     u64         seed;
     i64         iter;       // -1 outside the random tests
-    char const *phase;
+    const char *phase;
     Str         input;      // dumped on failure
     Output     *out;
     b32         dead;
@@ -119,7 +119,7 @@ typedef struct {
 } Ctx;
 static Ctx ctx;
 
-static Str cstr(char const *s) {
+static Str cstr(const char *s) {
     iz n = 0;
     for (; s[n]; n++) {}
     return (Str){(u8 *)s, n};
@@ -190,7 +190,7 @@ static _Noreturn void context(void) {
     ExitProcess(1);
 }
 
-static _Noreturn void fail(char const *check, char const *what, i64 a, i64 b) {
+static _Noreturn void fail(const char *check, const char *what, i64 a, i64 b) {
     Output *o = ctx.out;
     if (ctx.dead) {
         ExitProcess(1);  // failed while reporting
@@ -308,7 +308,7 @@ static void bc(Buf *b, u8 c) {
     bput(b, (Str){&c, 1});
 }
 
-static void bs(Buf *b, char const *s) {
+static void bs(Buf *b, const char *s) {
     bput(b, cstr(s));
 }
 
@@ -333,7 +333,7 @@ static Str bstr(Buf *b) {
 // check that doubling the input doubles the time.
 static u64 scale = 100;
 
-static void brep(Buf *b, char const *s, iz n) {
+static void brep(Buf *b, const char *s, iz n) {
     Str t = cstr(s);
     n = n * (iz)scale / 100;
     for (iz i = 0; i < n && !b->over; i++) {
@@ -416,7 +416,7 @@ static void html_plain(Buf *b, MdNode *n) {
     }
 }
 
-static void html_tag(Buf *b, char const *open, char const *name, char const *close) {
+static void html_tag(Buf *b, const char *open, const char *name, const char *close) {
     bs(b, open);
     bs(b, name);
     bs(b, close);
@@ -442,7 +442,7 @@ static void html_table(Buf *b, MdNode *t) {
         MdNode *head = t->first->first;
         for (i32 i = 0; i < t->ncols; i++) {
             bcr(b);
-            char const *name = header ? "th" : "td";
+            const char *name = header ? "th" : "td";
             u8 align = head ? head->align : 0;
             bs(b, "<");
             bs(b, name);
@@ -640,7 +640,7 @@ typedef struct {
     iz     limit;
 } Check;
 
-static void ck(b32 ok, char const *what, i64 a, i64 b) {
+static void ck(b32 ok, const char *what, i64 a, i64 b) {
     if (!ok) {
         fail("tree", what, a, b);
     }
@@ -837,7 +837,7 @@ static Str readpath(Arena *a, Str name) {
     return (Str){data, off};
 }
 
-static Str readfile(Arena *a, Str dir, char const *name) {
+static Str readfile(Arena *a, Str dir, const char *name) {
     u8  buf[512];
     Buf b = {buf, 0, sizeof(buf), 0};
     bput(&b, dir);
@@ -959,16 +959,16 @@ static Examples load_examples(Arena *a, Str json) {
 
 // Examples that fail for a known reason, by file and number.
 typedef struct {
-    char const *file;
+    const char *file;
     i32         num;
-    char const *why;
+    const char *why;
 } Known;
 
-static Known const known[] = {
+static const Known known[] = {
     {0, 0, 0},
 };
 
-static char const *known_why(char const *file, i32 num) {
+static const char *known_why(const char *file, i32 num) {
     for (iz i = 0; known[i].file; i++) {
         if (equals(cstr(known[i].file), cstr(file)) && known[i].num==num) {
             return known[i].why;
@@ -983,7 +983,7 @@ typedef struct {
 } Section;
 
 // Returns the number of unexpected failures.
-static i32 run_spec(Rig *r, Str dir, char const *file, u32 ext, b32 verbose) {
+static i32 run_spec(Rig *r, Str dir, const char *file, u32 ext, b32 verbose) {
     Output *o = r->out;
     Arena   scratch_data = r->data;
     Str json = readfile(&scratch_data, dir, file);
@@ -1019,7 +1019,7 @@ static i32 run_spec(Rig *r, Str dir, char const *file, u32 ext, b32 verbose) {
         secs[s].total++;
         secs[s].pass += ok;
         pass += ok;
-        char const *why = known_why(file, e->num);
+        const char *why = known_why(file, e->num);
         if (!ok || verbose) {
             print(o, ok ? S("ok   ") : why ? S("known ") : S("FAIL "));
             print(o, cstr(file));
@@ -1071,11 +1071,11 @@ static i32 run_spec(Rig *r, Str dir, char const *file, u32 ext, b32 verbose) {
 // Unit cases: behavior the spec files do not pin down
 
 typedef struct {
-    char const *md;
-    char const *html;
+    const char *md;
+    const char *html;
 } Case;
 
-static Case const cases[] = {
+static const Case cases[] = {
     {"foo\n| a | b |\n|---|---|\n| c | d |\n",
      "<p>foo</p>\n<table>\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n"
      "<tbody>\n<tr>\n<td>c</td>\n<td>d</td>\n</tr>\n</tbody>\n</table>\n"},
@@ -1111,10 +1111,10 @@ static Case const cases[] = {
 };
 
 // Heading anchors, in order, for md_slugify.
-static char const *const slug_md =
+static const char *const slug_md =
     "# Hello, World!\n## Hello, World!\n### hello-world\n#### a_b *C* `d`\n"
     "##### \xc3\x89t\xc3\xa9 \xe2\x82\xac\n###### !!!\n# !!!\n";
-static char const *const slugs[] = {
+static const char *const slugs[] = {
     "hello-world", "hello-world-1", "hello-world-2", "a_b-c-d",
     "\xc3\xa9t\xc3\xa9-", "", "-1",
 };
@@ -1173,7 +1173,7 @@ static i32 run_unit(Rig *r) {
 
 // Random documents
 
-static char const *const prefixes[] = {
+static const char *const prefixes[] = {
     "", "> ", ">", "- ", "* ", "+ ", "1. ", "2) ", "10. ", "  ", "    ", "\t",
     "   - ", "# ", "## ", "###### ", "####### ", "===", "---", "***", "___",
     "- - -", "```", "```c ", "~~~", "<div>", "</div>", "<!-- ", "<?", "<pre>",
@@ -1182,7 +1182,7 @@ static char const *const prefixes[] = {
     "<a href=\"x\">", ":--", "a | b", "|", "||",
 };
 
-static char const *const tokens[] = {
+static const char *const tokens[] = {
     "foo", "bar", "a", "b", "x", " ", " ", "  ", "   ", "*", "**", "***", "_",
     "__", "~", "~~", "~~~", "`", "``", "```", "[", "]", "![", "](", "](/u)",
     "](/u \"t\")", "](<a b>)", "][", "[a]", "[b]", "[]", "(", ")", "<", ">",
@@ -1206,7 +1206,7 @@ static void gen_doc(Buf *g, u64 *rng) {
         }
         i32 nt = chance(rng, 10) ? 0 : (i32)rnd(rng, 8);
         for (i32 t = 0; t < nt; t++) {
-            char const *tok = tokens[rnd(rng, (u64)countof(tokens))];
+            const char *tok = tokens[rnd(rng, (u64)countof(tokens))];
             if (tok[0] == 0) {
                 bc(g, 0);       // a NUL: the token is "\0"
             } else {
@@ -1214,7 +1214,7 @@ static void gen_doc(Buf *g, u64 *rng) {
             }
         }
         if (l+1<lines || chance(rng, 70)) {
-            switch (weighted(rng, (i32 const[]){90, 6, 4}, 3)) {
+            switch (weighted(rng, (const i32[]){90, 6, 4}, 3)) {
             case 0:  bs(g, "\n");   break;
             case 1:  bs(g, "\r\n"); break;
             default: bs(g, "\r");   break;
@@ -1290,7 +1290,7 @@ static void iteration(Rig *r, u64 seed, i64 iter) {
         bs(&nl, "\n");
     }
     Buf *variants[] = {&norm, &crlf, &bom, &nl};
-    static char const *const names[] = {
+    static const char *const names[] = {
         "normalized text parses differently",
         "CRLF text parses differently",
         "text after a BOM parses differently",
@@ -1343,7 +1343,7 @@ static void iteration(Rig *r, u64 seed, i64 iter) {
 // Pathological inputs
 
 typedef struct {
-    char const *name;
+    const char *name;
     void      (*gen)(Buf *);
 } Path;
 
@@ -1520,7 +1520,7 @@ static void p_alt_nest(Buf *b)       { brep(b, "![a ", 20000); brep(b, "](b)", 2
 static void p_titles_long(Buf *b)    { bs(b, "[a](b \""); brep(b, "x\\\"", 30000); bs(b, "\")"); }
 static void p_many_cells_esc(Buf *b) { bs(b, "|a|\n|-|\n"); brep(b, "|\\|a\\|\n", 12000); }
 
-static Path const paths[] = {
+static const Path paths[] = {
     {"nested strong emph", p_nested_strong},
     {"many emph closers with no openers", p_emph_closers},
     {"many emph openers with no closers", p_emph_openers},
@@ -1689,7 +1689,7 @@ static i32 run_paths(Rig *r, i32 limit_ms) {
     QueryPerformanceFrequency(&freq);
     i32 bad   = 0;
     i64 worst = 0;
-    char const *worst_name = "";
+    const char *worst_name = "";
     ctx.phase = "path";
     for (iz i = 0; i < countof(paths); i++) {
         alive();

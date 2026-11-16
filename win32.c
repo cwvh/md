@@ -21,9 +21,9 @@ typedef struct {
 } Guid;
 _Static_assert(sizeof(Guid) == 16, "");
 
-static b32 guideq(Guid const *x, Guid const *y) {
-    u8 const *p = (u8 const *)x;
-    u8 const *q = (u8 const *)y;
+static b32 guideq(const Guid *x, const Guid *y) {
+    const u8 *p = (const u8 *)x;
+    const u8 *q = (const u8 *)y;
     for (i32 i = 0; i < 16; i++) {
         if (p[i] != q[i]) {
             return 0;
@@ -80,8 +80,8 @@ typedef struct {
     uptr        icon;
     uptr        cursor;
     uptr        background;
-    c16 const  *menuname;
-    c16 const  *classname;
+    const c16  *menuname;
+    const c16  *classname;
     uptr        iconsm;
 } WndClassEx;
 
@@ -122,7 +122,7 @@ typedef struct {
     u32        size;
     uptr       owner;
     uptr       instance;
-    c16 const *filter;
+    const c16 *filter;
     c16       *customfilter;
     u32        maxcustfilter;
     u32        filterindex;
@@ -130,15 +130,15 @@ typedef struct {
     u32        maxfile;
     c16       *filetitle;
     u32        maxfiletitle;
-    c16 const *initialdir;
-    c16 const *title;
+    const c16 *initialdir;
+    const c16 *title;
     u32        flags;
     u16        fileoffset;
     u16        fileextension;
-    c16 const *defext;
+    const c16 *defext;
     iptr       custdata;
     void      *hook;
-    c16 const *templatename;
+    const c16 *templatename;
     void      *reserved;
     u32        reserved2;
     u32        flagsex;
@@ -254,9 +254,9 @@ typedef struct { f32 left, top, right, bottom; } DwOverhangMetrics;
 // COM vtables. Every object is a pointer to a pointer to its vtable.
 
 typedef struct UnknownVtbl UnknownVtbl;
-typedef struct { UnknownVtbl const *v; } ComObj;
+typedef struct { const UnknownVtbl *v; } ComObj;
 struct UnknownVtbl {
-    i32 (*QueryInterface)(void *, Guid const *, void **);
+    i32 (*QueryInterface)(void *, const Guid *, void **);
     u32 (*AddRef)(void *);
     u32 (*Release)(void *);
 };
@@ -266,7 +266,7 @@ struct UnknownVtbl {
 
 // ID2D1Factory: slots 3..16
 typedef struct D2dFactoryVtbl D2dFactoryVtbl;
-typedef struct { D2dFactoryVtbl const *v; } D2dFactory;
+typedef struct { const D2dFactoryVtbl *v; } D2dFactory;
 struct D2dFactoryVtbl {
     UnknownVtbl base;
     void *ReloadSystemMetrics;
@@ -280,8 +280,8 @@ struct D2dFactoryVtbl {
     void *CreateStrokeStyle;
     void *CreateDrawingStateBlock;
     void *CreateWicBitmapRenderTarget;
-    i32 (*CreateHwndRenderTarget)(D2dFactory *, D2dRenderTargetProps const *,
-            D2dHwndRenderTargetProps const *, void **);
+    i32 (*CreateHwndRenderTarget)(D2dFactory *, const D2dRenderTargetProps *,
+            const D2dHwndRenderTargetProps *, void **);
     void *CreateDxgiSurfaceRenderTarget;
     void *CreateDCRenderTarget;
 };
@@ -289,16 +289,16 @@ struct D2dFactoryVtbl {
 // ID2D1HwndRenderTarget (ID2D1RenderTarget plus three slots). Brushes and
 // bitmaps are passed as void *: a brush only needs Release.
 typedef struct D2dRtVtbl D2dRtVtbl;
-typedef struct { D2dRtVtbl const *v; } D2dRt;
+typedef struct { const D2dRtVtbl *v; } D2dRt;
 struct D2dRtVtbl {
     UnknownVtbl base;
     void *GetFactory;
-    i32 (*CreateBitmap)(D2dRt *, D2dSizeU, void const *pixels, u32 pitch,
-            D2dBitmapProps const *, void **);
+    i32 (*CreateBitmap)(D2dRt *, D2dSizeU, const void *pixels, u32 pitch,
+            const D2dBitmapProps *, void **);
     void *CreateBitmapFromWicBitmap;
     void *CreateSharedBitmap;
     void *CreateBitmapBrush;
-    i32 (*CreateSolidColorBrush)(D2dRt *, D2dColor const *, D2dBrushProps const *, void **);
+    i32 (*CreateSolidColorBrush)(D2dRt *, const D2dColor *, const D2dBrushProps *, void **);
     void *CreateGradientStopCollection;
     void *CreateLinearGradientBrush;
     void *CreateRadialGradientBrush;
@@ -307,21 +307,21 @@ struct D2dRtVtbl {
     void *CreateMesh;
     void (*DrawLine)(D2dRt *, D2dPoint, D2dPoint, void *brush, f32 width, void *style);
     void *DrawRectangle;
-    void (*FillRectangle)(D2dRt *, D2dRect const *, void *brush);
-    void (*DrawRoundedRectangle)(D2dRt *, D2dRoundedRect const *, void *brush, f32 width, void *style);
-    void (*FillRoundedRectangle)(D2dRt *, D2dRoundedRect const *, void *brush);
+    void (*FillRectangle)(D2dRt *, const D2dRect *, void *brush);
+    void (*DrawRoundedRectangle)(D2dRt *, const D2dRoundedRect *, void *brush, f32 width, void *style);
+    void (*FillRoundedRectangle)(D2dRt *, const D2dRoundedRect *, void *brush);
     void *DrawEllipse;
     void *FillEllipse;
     void *DrawGeometry;
     void *FillGeometry;
     void *FillMesh;
     void *FillOpacityMask;
-    void (*DrawBitmap)(D2dRt *, void *bitmap, D2dRect const *dst, f32 opacity,
-            u32 interpolation, D2dRect const *src);
+    void (*DrawBitmap)(D2dRt *, void *bitmap, const D2dRect *dst, f32 opacity,
+            u32 interpolation, const D2dRect *src);
     void *DrawText;
     void (*DrawTextLayout)(D2dRt *, D2dPoint, void *layout, void *brush, u32 options);
     void *DrawGlyphRun;
-    void (*SetTransform)(D2dRt *, D2dMatrix const *);
+    void (*SetTransform)(D2dRt *, const D2dMatrix *);
     void *GetTransform;
     void *SetAntialiasMode;
     void *GetAntialiasMode;
@@ -336,9 +336,9 @@ struct D2dRtVtbl {
     void *Flush;
     void *SaveDrawingState;
     void *RestoreDrawingState;
-    void (*PushAxisAlignedClip)(D2dRt *, D2dRect const *, u32 aamode);
+    void (*PushAxisAlignedClip)(D2dRt *, const D2dRect *, u32 aamode);
     void (*PopAxisAlignedClip)(D2dRt *);
-    void (*Clear)(D2dRt *, D2dColor const *);
+    void (*Clear)(D2dRt *, const D2dColor *);
     void (*BeginDraw)(D2dRt *);
     i32  (*EndDraw)(D2dRt *, u64 *tag1, u64 *tag2);
     void *GetPixelFormat;       // returns a struct, see top of file
@@ -349,13 +349,13 @@ struct D2dRtVtbl {
     void *GetMaximumBitmapSize;
     void *IsSupported;
     void *CheckWindowState;
-    i32 (*Resize)(D2dRt *, D2dSizeU const *);
+    i32 (*Resize)(D2dRt *, const D2dSizeU *);
     void *GetHwnd;
 };
 
 // IDWriteFactory: slots 3..23
 typedef struct DwFactoryVtbl DwFactoryVtbl;
-typedef struct { DwFactoryVtbl const *v; } DwFactory;
+typedef struct { const DwFactoryVtbl *v; } DwFactory;
 struct DwFactoryVtbl {
     UnknownVtbl base;
     void *GetSystemFontCollection;
@@ -370,11 +370,11 @@ struct DwFactoryVtbl {
     void *CreateCustomRenderingParams;
     void *RegisterFontFileLoader;
     void *UnregisterFontFileLoader;
-    i32 (*CreateTextFormat)(DwFactory *, c16 const *family, void *collection,
-            u32 weight, u32 style, u32 stretch, f32 size, c16 const *locale, void **);
+    i32 (*CreateTextFormat)(DwFactory *, const c16 *family, void *collection,
+            u32 weight, u32 style, u32 stretch, f32 size, const c16 *locale, void **);
     void *CreateTypography;
     void *GetGdiInterop;
-    i32 (*CreateTextLayout)(DwFactory *, c16 const *, u32 len, void *format,
+    i32 (*CreateTextLayout)(DwFactory *, const c16 *, u32 len, void *format,
             f32 maxw, f32 maxh, void **);
     void *CreateGdiCompatibleTextLayout;
     void *CreateEllipsisTrimmingSign;
@@ -386,7 +386,7 @@ struct DwFactoryVtbl {
 // IDWriteTextFormat: slots 3..27, then IDWriteTextLayout 28..66. A layout
 // is also a text format, so one vtable serves both.
 typedef struct DwLayoutVtbl DwLayoutVtbl;
-typedef struct { DwLayoutVtbl const *v; } DwLayout;
+typedef struct { const DwLayoutVtbl *v; } DwLayout;
 struct DwLayoutVtbl {
     UnknownVtbl base;
     i32 (*SetTextAlignment)(DwLayout *, u32);
@@ -418,7 +418,7 @@ struct DwLayoutVtbl {
     i32 (*SetMaxWidth)(DwLayout *, f32);
     void *SetMaxHeight;
     void *SetFontCollection;
-    i32 (*SetFontFamilyName)(DwLayout *, c16 const *, DwTextRange);
+    i32 (*SetFontFamilyName)(DwLayout *, const c16 *, DwTextRange);
     i32 (*SetFontWeight)(DwLayout *, u32, DwTextRange);
     i32 (*SetFontStyle)(DwLayout *, u32, DwTextRange);
     void *SetFontStretch;
@@ -459,7 +459,7 @@ struct DwLayoutVtbl {
 
 // IDWriteInlineObject, which we implement ourselves (see gfx.c).
 typedef struct DwInlineVtbl DwInlineVtbl;
-typedef struct { DwInlineVtbl const *v; } DwInline;
+typedef struct { const DwInlineVtbl *v; } DwInline;
 struct DwInlineVtbl {
     UnknownVtbl base;
     i32 (*Draw)(DwInline *, void *ctx, void *renderer, f32 ox, f32 oy,
@@ -472,7 +472,7 @@ struct DwInlineVtbl {
 // ID2D1Bitmap, which is an ID2D1Image and an ID2D1Resource (GetFactory).
 // Only CopyFromMemory is called.
 typedef struct D2dBitmapVtbl D2dBitmapVtbl;
-typedef struct { D2dBitmapVtbl const *v; } D2dBitmap;
+typedef struct { const D2dBitmapVtbl *v; } D2dBitmap;
 struct D2dBitmapVtbl {
     UnknownVtbl base;
     void *GetFactory;
@@ -482,7 +482,7 @@ struct D2dBitmapVtbl {
     void *GetDpi;
     void *CopyFromBitmap;
     void *CopyFromRenderTarget;
-    i32 (*CopyFromMemory)(D2dBitmap *, void const *rect, void const *pixels, u32 pitch);
+    i32 (*CopyFromMemory)(D2dBitmap *, const void *rect, const void *pixels, u32 pitch);
 };
 
 // The Windows Imaging Component (image decoding). The official C vtables
@@ -490,11 +490,11 @@ struct D2dBitmapVtbl {
 
 // IWICImagingFactory: slots 3..27
 typedef struct WicFactoryVtbl WicFactoryVtbl;
-typedef struct { WicFactoryVtbl const *v; } WicFactory;
+typedef struct { const WicFactoryVtbl *v; } WicFactory;
 struct WicFactoryVtbl {
     UnknownVtbl base;
     void *CreateDecoderFromFilename;
-    i32 (*CreateDecoderFromStream)(WicFactory *, void *stream, Guid const *vendor,
+    i32 (*CreateDecoderFromStream)(WicFactory *, void *stream, const Guid *vendor,
             u32 cacheoption, void **);
     void *CreateDecoderFromFileHandle;
     void *CreateComponentInfo;
@@ -523,7 +523,7 @@ struct WicFactoryVtbl {
 
 // IWICStream: IUnknown, ISequentialStream, IStream, then its own
 typedef struct WicStreamVtbl WicStreamVtbl;
-typedef struct { WicStreamVtbl const *v; } WicStream;
+typedef struct { const WicStreamVtbl *v; } WicStream;
 struct WicStreamVtbl {
     UnknownVtbl base;
     void *Read;
@@ -539,18 +539,18 @@ struct WicStreamVtbl {
     void *Clone;
     void *InitializeFromIStream;
     void *InitializeFromFilename;
-    i32 (*InitializeFromMemory)(WicStream *, u8 const *, u32 size);
+    i32 (*InitializeFromMemory)(WicStream *, const u8 *, u32 size);
     void *InitializeFromIStreamRegion;
 };
 
 // IWICMetadataQueryReader
 typedef struct WicQueryVtbl WicQueryVtbl;
-typedef struct { WicQueryVtbl const *v; } WicQuery;
+typedef struct { const WicQueryVtbl *v; } WicQuery;
 struct WicQueryVtbl {
     UnknownVtbl base;
     void *GetContainerFormat;
     void *GetLocation;
-    i32 (*GetMetadataByName)(WicQuery *, c16 const *name, PropVar *);
+    i32 (*GetMetadataByName)(WicQuery *, const c16 *name, PropVar *);
     void *GetEnumerator;
 };
 
@@ -558,14 +558,14 @@ struct WicQueryVtbl {
 // IUnknown are the same in IWICFormatConverter, so either serves as the
 // source argument of another converter.
 typedef struct WicFrameVtbl WicFrameVtbl;
-typedef struct { WicFrameVtbl const *v; } WicFrame;
+typedef struct { const WicFrameVtbl *v; } WicFrame;
 struct WicFrameVtbl {
     UnknownVtbl base;
     i32 (*GetSize)(WicFrame *, u32 *w, u32 *h);
     void *GetPixelFormat;
     void *GetResolution;
     void *CopyPalette;
-    i32 (*CopyPixels)(WicFrame *, WicRect const *, u32 stride, u32 size, u8 *);
+    i32 (*CopyPixels)(WicFrame *, const WicRect *, u32 stride, u32 size, u8 *);
     i32 (*GetMetadataQueryReader)(WicFrame *, void **);
     void *GetColorContexts;
     void *GetThumbnail;
@@ -573,22 +573,22 @@ struct WicFrameVtbl {
 
 // IWICFormatConverter
 typedef struct WicConverterVtbl WicConverterVtbl;
-typedef struct { WicConverterVtbl const *v; } WicConverter;
+typedef struct { const WicConverterVtbl *v; } WicConverter;
 struct WicConverterVtbl {
     UnknownVtbl base;
     i32 (*GetSize)(WicConverter *, u32 *w, u32 *h);
     void *GetPixelFormat;
     void *GetResolution;
     void *CopyPalette;
-    i32 (*CopyPixels)(WicConverter *, WicRect const *, u32 stride, u32 size, u8 *);
-    i32 (*Initialize)(WicConverter *, void *source, Guid const *format, u32 dither,
+    i32 (*CopyPixels)(WicConverter *, const WicRect *, u32 stride, u32 size, u8 *);
+    i32 (*Initialize)(WicConverter *, void *source, const Guid *format, u32 dither,
             void *palette, f64 threshold, u32 palettetype);
     void *CanConvert;
 };
 
 // IWICBitmapDecoder
 typedef struct WicDecoderVtbl WicDecoderVtbl;
-typedef struct { WicDecoderVtbl const *v; } WicDecoder;
+typedef struct { const WicDecoderVtbl *v; } WicDecoder;
 struct WicDecoderVtbl {
     UnknownVtbl base;
     void *QueryCapability;
@@ -767,33 +767,33 @@ enum {
 #define HKEY_CURRENT_USER    ((uptr)0x80000001)
 #define HEAP_ZERO_MEMORY     8
 #define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((uptr)-4)
-#define MAKEINTRESOURCEW(i)  ((c16 const *)(uptr)(i))
+#define MAKEINTRESOURCEW(i)  ((const c16 *)(uptr)(i))
 #define FAILED(hr)           ((hr) < 0)
 #define LOWORD(x)            ((u32)(x) & 0xffffu)
 #define HIWORD(x)            (((u32)(x) >> 16) & 0xffffu)
 
 W32(void *) VirtualAlloc(void *, uz, u32, u32);
 W32(b32)    VirtualProtect(void *, uz, u32, u32 *);
-W32(uptr)   CreateFileW(c16 const *, u32, u32, void *, u32, u32, uptr);
+W32(uptr)   CreateFileW(const c16 *, u32, u32, void *, u32, u32, uptr);
 W32(b32)    ReadFile(uptr, u8 *, u32, u32 *, void *);
 W32(b32)    GetFileSizeEx(uptr, i64 *);
-W32(b32)    WriteFile(uptr, u8 const *, u32, u32 *, void *);
-W32(b32)    WriteConsoleW(uptr, c16 const *, u32, u32 *, void *);
+W32(b32)    WriteFile(uptr, const u8 *, u32, u32 *, void *);
+W32(b32)    WriteConsoleW(uptr, const c16 *, u32, u32 *, void *);
 W32(uptr)   GetStdHandle(i32);
 W32(b32)    GetConsoleMode(uptr, u32 *);
 W32(u64)    GetTickCount64(void);
 W32(b32)    QueryPerformanceCounter(i64 *);
 W32(b32)    QueryPerformanceFrequency(i64 *);
-W32(b32)    GetFileAttributesExW(c16 const *, i32, void *);
+W32(b32)    GetFileAttributesExW(const c16 *, i32, void *);
 W32(b32)    CloseHandle(uptr);
-W32(uptr)   CreateEventW(void *, b32 manual, b32 initial, c16 const *);
+W32(uptr)   CreateEventW(void *, b32 manual, b32 initial, const c16 *);
 W32(b32)    SetEvent(uptr);
 W32(u32)    WaitForSingleObject(uptr, u32);
 W32(void *) CreateThread(void *, uz, u32 (*)(void *), void *, u32, u32 *);
 W32(u32)    GetLastError(void);
 W32(c16 *)  GetCommandLineW(void);
-W32(uptr)   GetModuleHandleW(c16 const *);
-W32(void *) GetProcAddress(uptr, char const *);
+W32(uptr)   GetModuleHandleW(const c16 *);
+W32(void *) GetProcAddress(uptr, const char *);
 W32(uptr)   GetProcessHeap(void);
 W32(void *) HeapAlloc(uptr, u32, uz);
 W32(b32)    HeapFree(uptr, u32, void *);
@@ -803,8 +803,8 @@ W32(b32)    GlobalUnlock(uptr);
 __declspec(dllimport) __attribute((noreturn))
 void ExitProcess(u32);
 
-W32(u16)    RegisterClassExW(WndClassEx const *);
-W32(uptr)   CreateWindowExW(u32, c16 const *, c16 const *, u32, i32, i32, i32, i32,
+W32(u16)    RegisterClassExW(const WndClassEx *);
+W32(uptr)   CreateWindowExW(u32, const c16 *, const c16 *, u32, i32, i32, i32, i32,
                 uptr, uptr, uptr, void *);
 W32(iptr)   DefWindowProcW(uptr, u32, uptr, iptr);
 W32(b32)    DestroyWindow(uptr);
@@ -812,44 +812,44 @@ W32(void)   PostQuitMessage(i32);
 W32(b32)    ShowWindow(uptr, i32);
 W32(b32)    UpdateWindow(uptr);
 W32(b32)    GetMessageW(Msg *, uptr, u32, u32);
-W32(b32)    TranslateMessage(Msg const *);
-W32(iptr)   DispatchMessageW(Msg const *);
+W32(b32)    TranslateMessage(const Msg *);
+W32(iptr)   DispatchMessageW(const Msg *);
 W32(uptr)   BeginPaint(uptr, PaintStruct *);
-W32(b32)    EndPaint(uptr, PaintStruct const *);
-W32(b32)    InvalidateRect(uptr, WinRect const *, b32);
+W32(b32)    EndPaint(uptr, const PaintStruct *);
+W32(b32)    InvalidateRect(uptr, const WinRect *, b32);
 W32(b32)    GetClientRect(uptr, WinRect *);
 W32(b32)    SetWindowPos(uptr, uptr, i32, i32, i32, i32, u32);
-W32(b32)    SetWindowTextW(uptr, c16 const *);
+W32(b32)    SetWindowTextW(uptr, const c16 *);
 W32(b32)    AdjustWindowRectEx(WinRect *, u32, b32, u32);
 W32(uptr)   SetTimer(uptr, uptr, u32, void *);
 W32(b32)    KillTimer(uptr, uptr);
-W32(uptr)   LoadCursorW(uptr, c16 const *);
+W32(uptr)   LoadCursorW(uptr, const c16 *);
 W32(uptr)   SetCursor(uptr);
 W32(uptr)   SetCapture(uptr);
 W32(b32)    ReleaseCapture(void);
 W32(i16)    GetKeyState(i32);
 W32(b32)    TrackMouseEvent(TrackMouse *);
 W32(b32)    ScreenToClient(uptr, WinPoint *);
-W32(i32)    MessageBoxW(uptr, c16 const *, c16 const *, u32);
+W32(i32)    MessageBoxW(uptr, const c16 *, const c16 *, u32);
 W32(b32)    OpenClipboard(uptr);
 W32(b32)    EmptyClipboard(void);
 W32(uptr)   SetClipboardData(u32, uptr);
 W32(b32)    CloseClipboard(void);
 
-W32(uptr)   ShellExecuteW(uptr, c16 const *, c16 const *, c16 const *, c16 const *, i32);
+W32(uptr)   ShellExecuteW(uptr, const c16 *, const c16 *, const c16 *, const c16 *, i32);
 W32(void)   DragAcceptFiles(uptr, b32);
 W32(u32)    DragQueryFileW(uptr, u32, c16 *, u32);
 W32(void)   DragFinish(uptr);
 W32(b32)    GetOpenFileNameW(OpenFileName *);
-W32(i32)    RegOpenKeyExW(uptr, c16 const *, u32, u32, uptr *);
-W32(i32)    RegQueryValueExW(uptr, c16 const *, void *, u32 *, void *, u32 *);
+W32(i32)    RegOpenKeyExW(uptr, const c16 *, u32, u32, uptr *);
+W32(i32)    RegQueryValueExW(uptr, const c16 *, void *, u32 *, void *, u32 *);
 W32(i32)    RegCloseKey(uptr);
-W32(i32)    DwmSetWindowAttribute(uptr, u32, void const *, u32);
+W32(i32)    DwmSetWindowAttribute(uptr, u32, const void *, u32);
 W32(i32)    CoInitializeEx(void *, u32);
-W32(i32)    CoCreateInstance(Guid const *, void *, u32, Guid const *, void **);
+W32(i32)    CoCreateInstance(const Guid *, void *, u32, const Guid *, void **);
 W32(i32)    PropVariantClear(PropVar *);
-W32(i32)    D2D1CreateFactory(u32, Guid const *, void const *, void **);
-W32(i32)    DWriteCreateFactory(u32, Guid const *, void **);
+W32(i32)    D2D1CreateFactory(u32, const Guid *, const void *, void **);
+W32(i32)    DWriteCreateFactory(u32, const Guid *, void **);
 W32(uptr)   GetClipboardData(u32);
 
 #endif

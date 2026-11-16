@@ -234,7 +234,7 @@ static b32 os_read_file(Arena *a, Str path, Str *out) {
     return ok;
 }
 
-static FileStat win_stat(c16 const *path) {
+static FileStat win_stat(const c16 *path) {
     FileStat r = {0};
     FileAttributeData d = {0};
     if (GetFileAttributesExW(path, 0, &d)) {
@@ -362,7 +362,7 @@ static b32 os_clipboard_get(Arena *a, Str *out) {
     }
     b32 ok  = 0;
     uptr h  = GetClipboardData(CF_UNICODETEXT);
-    c16 const *w = h ? GlobalLock(h) : 0;
+    const c16 *w = h ? GlobalLock(h) : 0;
     if (w) {
         iz n = 0;
         while (n < (iz)1<<28 && w[n]) {
@@ -606,8 +606,8 @@ static void win_resized(void) {
 }
 
 static b32 isimmersive(iptr lparam) {
-    c16 const *s = (c16 const *)lparam;
-    c16 const *t = L"ImmersiveColorSet";
+    const c16 *s = (const c16 *)lparam;
+    const c16 *t = L"ImmersiveColorSet";
     if (!s) {
         return 0;
     }
@@ -856,12 +856,12 @@ static Args getargs(Arena *perm) {
 
 // Startup
 
-static void win_fatal(c16 const *msg) {
+static void win_fatal(const c16 *msg) {
     MessageBoxW(0, msg, L"md", MB_OK|MB_ICONERROR);
     ExitProcess(1);
 }
 
-static void *findproc(c16 const *dll, char const *name) {
+static void *findproc(const c16 *dll, const char *name) {
     uptr m = GetModuleHandleW(dll);
     return m ? GetProcAddress(m, name) : 0;
 }

@@ -92,7 +92,7 @@ static b32 chance(u64 *s, u64 percent) {
 typedef struct {
     u64          seed;
     i64          iter;      // -1 outside the random tests
-    char const  *phase;
+    const char  *phase;
     Str          input;     // dumped on failure
     Output      *out;
     b32          dead;
@@ -100,7 +100,7 @@ typedef struct {
 } Ctx;
 static Ctx ctx;
 
-static Str cstr(char const *s) {
+static Str cstr(const char *s) {
     iz n = 0;
     for (; s[n]; n++) {}
     return (Str){(u8 *)s, n};
@@ -171,7 +171,7 @@ static _Noreturn void context(void) {
     ExitProcess(1);
 }
 
-static _Noreturn void fail(char const *check, char const *what, i64 a, i64 b) {
+static _Noreturn void fail(const char *check, const char *what, i64 a, i64 b) {
     Output *o = ctx.out;
     if (ctx.dead) {
         ExitProcess(1);  // failed while reporting
@@ -250,11 +250,11 @@ static i64 now_us(void) {
 // all the aliases comparable.
 
 typedef struct {
-    char const *aliases;    // the first one is the canonical name
-    char const *sample;
+    const char *aliases;    // the first one is the canonical name
+    const char *sample;
 } LangRow;
 
-static LangRow const langrows[] = {
+static const LangRow langrows[] = {
     {"c h", "#include <a.h>\nint main(void) { return 0; }\n"},
     {"cpp c++ cc cxx hpp hh", "#include <a>\nclass A { int x = 1; };\n"},
     {"cs csharp", "class A { int x = 1; string s = \"a\"; }\n"},
@@ -279,12 +279,12 @@ static LangRow const langrows[] = {
 };
 
 // Not languages, or not ones we claim.
-static char const *const unknown_langs[] = {
+static const char *const unknown_langs[] = {
     "", "text", "txt", "plaintext", "c#", "cpp1", "kotlin", "swift", "markdown", "md",
     "javascriptjavascript", "c ", " c", "sh\n", "diffs", "\xff", "c\0c",
 };
 
-static Str word_at(char const *s, iz *pos) {
+static Str word_at(const char *s, iz *pos) {
     while (s[*pos] == ' ') {
         (*pos)++;
     }
@@ -408,7 +408,7 @@ static Str render(Arena *a, Str code, HlSpans sp) {
 // The contract: sorted, non-overlapping, non-empty, inside the code, no
 // plain, adjacent spans of one kind merged, at most one per byte, and no
 // span edge inside a UTF-8 sequence of valid text.
-static void check_spans(Str code, HlSpans sp, char const *what) {
+static void check_spans(Str code, HlSpans sp, const char *what) {
     if (sp.len < 0 || sp.len > code.len) {
         fail(what, "more spans than bytes", sp.len, code.len);
     }
@@ -455,12 +455,12 @@ static void check_spans(Str code, HlSpans sp, char const *what) {
 // same length, which makes a miscounted line a test error, not a mystery.
 
 typedef struct {
-    char const *lang;
-    char const *code;
-    char const *marks;
+    const char *lang;
+    const char *code;
+    const char *marks;
 } Golden;
 
-static Golden const golden[] = {
+static const Golden golden[] = {
     {"c",
      "#include <stdio.h>\n"
      "#include \"my.h\"\n",
@@ -1502,7 +1502,7 @@ static void bput(Buf *b, Str s) {
     b->len += s.len;
 }
 
-static void bs(Buf *b, char const *s) {
+static void bs(Buf *b, const char *s) {
     bput(b, cstr(s));
 }
 
@@ -1516,7 +1516,7 @@ static Str bstr(Buf *b) {
 
 static u64 scale = 100;
 
-static void brep(Buf *b, char const *s, iz n) {
+static void brep(Buf *b, const char *s, iz n) {
     Str t = cstr(s);
     n = n * (iz)scale / 100;
     for (iz i = 0; i < n && !b->over; i++) {
@@ -1525,7 +1525,7 @@ static void brep(Buf *b, char const *s, iz n) {
 }
 
 // Pieces that start or end things in some language.
-static char const *const frags[] = {
+static const char *const frags[] = {
     "\"", "'", "`", "/*", "*/", "//", "#", "${", "$(", "$", "{", "}", "(", ")",
     "[", "]", "<<", "<<EOF", "EOF", "\\", "\n", " ", "  ", "\t", "r#\"", "R\"x(",
     ")x\"", "\"\"\"", "'''", "<!--", "-->", "<", ">", "</", "/>", "=", ":", ": ",
@@ -1642,12 +1642,12 @@ static void iteration(Arena perm, Arena scratch, u64 seed, i64 iter) {
 // Slow inputs
 
 typedef struct {
-    char const *name;
-    char const *unit;
-    char const *langs;      // space-separated, or "*" for all
+    const char *name;
+    const char *unit;
+    const char *langs;      // space-separated, or "*" for all
 } Path;
 
-static Path const paths[] = {
+static const Path paths[] = {
     // everywhere
     {"quotes",       "\"",                     "*"},
     {"apostrophes",  "'",                      "*"},
@@ -1742,7 +1742,7 @@ static Path const paths[] = {
     {"sql names",    "select ",                "sql"},
 };
 
-static b32 lang_listed(char const *list, Str lang) {
+static b32 lang_listed(const char *list, Str lang) {
     if (list[0]=='*' && !list[1]) {
         return 1;
     }
@@ -1761,13 +1761,13 @@ static b32 lang_listed(char const *list, Str lang) {
 static i32 run_paths(Arena perm, Arena big, i64 limit_ms) {
     ctx.phase = "path";
     ctx.iter  = -1;
-    iz const SIZE = (iz)1<<20;
+    const iz SIZE = (iz)1<<20;
     Arena a  = perm;
     u8 *mem  = new(&a, SIZE + 16, u8);
     Output *o = ctx.out;
     i32 bad = 0;
     i64 worst = 0;
-    char const *worst_name = "";
+    const char *worst_name = "";
     i64 total = 0;
     i64 runs = 0;
     i64 slow = 0;

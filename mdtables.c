@@ -6,18 +6,18 @@
 // so a lookup is a binary search over fixed-width records. A record is the
 // name (length bytes) then a 3-byte big-endian value: bits 0-16 the code
 // point, bits 17-20 an index+1 into md_ent_second (0: no second code point).
-static u32 const md_ent_second[] = {
+static const u32 md_ent_second[] = {
     0x6a, 0x331, 0x333, 0x338, 0x200a, 0x20d2, 0x20e5, 0xfe00,
 };
 
-static u16 const md_ent_off[] = {
+static const u16 md_ent_off[] = {
     0, 0, 0, 260, 1580, 4212, 7588, 11287, 12667, 13877, 14549,
     15147, 15707, 16157, 16829, 17577, 18189, 18740, 19260, 19596, 19794, 20047,
     20215, 20265, 20291, 20345, 20345, 20345, 20345, 20345, 20345, 20345, 20379,
     20379,
 };
 
-static u8 const md_ent_data[] =
+static const u8 md_ent_data[] =
     "DD" "\x00\x21\x45"
     "GT" "\x00\x00\x3e"
     "Gg" "\x00\x22\xd9"
@@ -2146,7 +2146,7 @@ static u8 const md_ent_data[] =
 
 // Non-ASCII code points in Unicode categories P* and S*, as sorted ranges:
 // first code point << 11 | (count - 1). Unicode 14.0.0.
-static u32 const md_punct[] = {
+static const u32 md_punct[] = {
     0x50808, 0x55801, 0x57003, 0x5a000, 0x5b002, 0x5d800, 0x5f800, 0x6b800,
     0x7b800, 0x161003, 0x16900d, 0x172806, 0x176800, 0x177810, 0x1ba800, 0x1bf000,
     0x1c2001, 0x1c3800, 0x1fb000, 0x241000, 0x2ad005, 0x2c4801, 0x2c6802, 0x2df000,

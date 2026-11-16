@@ -63,7 +63,7 @@ static HlSpans hl_highlight(Arena *a, Str lang, Str code);
 
 typedef struct HlCtx  HlCtx;
 typedef struct HlLang HlLang;
-typedef iz (*HlLexFn)(HlCtx *, HlLang const *, iz, b32);
+typedef iz (*HlLexFn)(HlCtx *, const HlLang *, iz, b32);
 
 enum {
     HL_TABSIZE  = 512,  // hash slots; the biggest word list has ~200 words
@@ -72,13 +72,13 @@ enum {
 };
 
 typedef struct {
-    char const *word;
+    const char *word;
     u8          len;
     u8          kind;
 } HlWord;
 
 struct HlCtx {
-    u8 const *p;
+    const u8 *p;
     iz        n;        // end of the text being lexed (<= len)
     iz        len;
     HlSpan   *out;      // 0 while counting
@@ -130,9 +130,9 @@ enum {
 };
 
 struct HlLang {
-    char const *names;      // aliases
-    char const *words;
-    char const *words2;     // more words, overriding the first
+    const char *names;      // aliases
+    const char *words;
+    const char *words2;     // more words, overriding the first
     HlLexFn     lex;
     u32         flags;
     b32         ci;
@@ -146,7 +146,7 @@ typedef enum {
     HL_L_HTML, HL_L_SQL, HL_L_COUNT,
 } HlLangId;
 
-static HlLang const hl_langs[HL_L_COUNT];
+static const HlLang hl_langs[HL_L_COUNT];
 
 
 // Words
@@ -164,7 +164,7 @@ static b32 hl_isblank(u8 c) { return c==' ' || c=='\t' || c=='\r'; }
 static b32 hl_isws(u8 c)    { return hl_isblank(c) || c=='\n' || c==0; }
 static b32 hl_ishex(u8 c)   { return hl_isdig(c) || ((c|32)>='a' && (c|32)<='f'); }
 
-static b32 hl_memeq(u8 const *a, u8 const *b, iz n) {
+static b32 hl_memeq(const u8 *a, const u8 *b, iz n) {
     for (iz i = 0; i < n; i++) {
         if (a[i] != b[i]) {
             return 0;
@@ -173,7 +173,7 @@ static b32 hl_memeq(u8 const *a, u8 const *b, iz n) {
     return 1;
 }
 
-static u32 hl_hash(u8 const *s, iz n, b32 ci) {
+static u32 hl_hash(const u8 *s, iz n, b32 ci) {
     u32 x = 2166136261u;
     for (iz i = 0; i < n; i++) {
         x = (x ^ (ci ? lower(s[i]) : s[i])) * 16777619u;
@@ -184,15 +184,15 @@ static u32 hl_hash(u8 const *s, iz n, b32 ci) {
 // Add a word list to the table. Sections are separated by "|": keywords,
 // types, constants, functions. Words are lower case in the case-
 // insensitive languages.
-static void hl_load(HlCtx *h, char const *s) {
-    static u8 const kinds[] = {HL_KEYWORD, HL_TYPE, HL_CONSTANT, HL_FUNCTION};
+static void hl_load(HlCtx *h, const char *s) {
+    static const u8 kinds[] = {HL_KEYWORD, HL_TYPE, HL_CONSTANT, HL_FUNCTION};
     i32 k = 0;
     while (*s) {
         if (*s == ' ') {
             s++;
             continue;
         }
-        char const *b = s;
+        const char *b = s;
         while (*s && *s!=' ') {
             s++;
         }
@@ -202,10 +202,10 @@ static void hl_load(HlCtx *h, char const *s) {
             continue;
         }
         assert(len <= HL_MAXWORD);
-        u32 j = hl_hash((u8 const *)b, len, 0) % HL_TABSIZE;
+        u32 j = hl_hash((const u8 *)b, len, 0) % HL_TABSIZE;
         while (h->tab[j].word) {
             HlWord *w = &h->tab[j];
-            if (w->len==len && hl_memeq((u8 const *)w->word, (u8 const *)b, len)) {
+            if (w->len==len && hl_memeq((const u8 *)w->word, (const u8 *)b, len)) {
                 break;
             }
             j = (j+1) % HL_TABSIZE;
@@ -219,7 +219,7 @@ static HlKind hl_lookup(HlCtx *h, iz b, iz e) {
     if (len<=0 || len>HL_MAXWORD || b<0 || e>h->n) {
         return HL_PLAIN;
     }
-    u8 const *s = h->p + b;
+    const u8 *s = h->p + b;
     u32 j = hl_hash(s, len, h->ci) % HL_TABSIZE;
     for (; h->tab[j].word; j = (j+1) % HL_TABSIZE) {
         HlWord *w = &h->tab[j];
@@ -235,7 +235,7 @@ static HlKind hl_lookup(HlCtx *h, iz b, iz e) {
     return HL_PLAIN;
 }
 
-static b32 hl_wordeq(HlCtx *h, iz b, iz e, char const *lit) {
+static b32 hl_wordeq(HlCtx *h, iz b, iz e, const char *lit) {
     iz i = 0;
     for (; lit[i]; i++) {
         if (b+i>=e || b+i>=h->n || lower(h->p[b+i])!=(u8)lit[i]) {
@@ -280,7 +280,7 @@ static iz hl_eol(HlCtx *h, iz i) {
 }
 
 // Where pat (m bytes) next starts at or after i, or h->n if nowhere.
-static iz hl_findmem(HlCtx *h, iz i, u8 const *pat, iz m, b32 ci) {
+static iz hl_findmem(HlCtx *h, iz i, const u8 *pat, iz m, b32 ci) {
     for (; i+m <= h->n; i++) {
         iz k = 0;
         for (; k<m && (ci ? lower(h->p[i+k]) : h->p[i+k])==pat[k]; k++) {}
@@ -291,9 +291,9 @@ static iz hl_findmem(HlCtx *h, iz i, u8 const *pat, iz m, b32 ci) {
     return h->n;
 }
 
-#define hl_find(h, i, lit) hl_findmem(h, i, (u8 const *)"" lit "", sizeof(lit)-1, 0)
+#define hl_find(h, i, lit) hl_findmem(h, i, (const u8 *)"" lit "", sizeof(lit)-1, 0)
 
-static b32 hl_starts(HlCtx *h, iz i, char const *lit) {
+static b32 hl_starts(HlCtx *h, iz i, const char *lit) {
     for (iz k = 0; lit[k]; k++) {
         if (hl_peek(h, i+k) != (u8)lit[k]) {
             return 0;
@@ -417,8 +417,8 @@ static iz hl_var_end(HlCtx *h, iz i, i32 flavor) {
 // whatever code is interpolated. Returns the index after the closing
 // delimiter. An unterminated string ends at the end of the line, or of the
 // text if it may span lines.
-static iz hl_str(HlCtx *h, HlLang const *L, iz b, iz i, u8 q, u32 m, HlKind kind) {
-    u8 const *p      = h->p;
+static iz hl_str(HlCtx *h, const HlLang *L, iz b, iz i, u8 q, u32 m, HlKind kind) {
+    const u8 *p      = h->p;
     iz        n      = h->n;
     iz        seg    = b;
     b32       triple = (m&HL_S_TRIPLE) != 0;
@@ -505,7 +505,7 @@ static b32 hl_numstart(HlCtx *h, iz i) {
 
 // The end of the number starting at i. Swallows suffixes (u32, f, n, L).
 static iz hl_num_end(HlCtx *h, iz i, b32 sep) {
-    u8 const *p   = h->p;
+    const u8 *p   = h->p;
     iz        n   = h->n;
     b32       hex = i+1<n && p[i]=='0' && (p[i+1]|32)=='x';
     b32       dot = 0;
@@ -551,7 +551,7 @@ static b32 hl_key_follows(HlCtx *h, iz i, u8 q, u8 term) {
 // A C++ raw string whose opening quote is at q: its end, or 0 if the
 // delimiter is malformed.
 static iz hl_raw_cpp(HlCtx *h, iz q) {
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     iz        d = q + 1;
     iz        k = d;
@@ -599,8 +599,8 @@ static iz hl_raw_rust(HlCtx *h, iz i) {
 
 // C and friends
 
-static iz hl_lex_c(HlCtx *h, HlLang const *L, iz i, b32 nested) {
-    u8 const *p       = h->p;
+static iz hl_lex_c(HlCtx *h, const HlLang *L, iz i, b32 nested) {
+    const u8 *p       = h->p;
     iz        n       = h->n;
     u32       f       = L->flags;
     iz        braces  = 0;
@@ -847,7 +847,7 @@ static iz hl_lex_c(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // Python
 
-static iz hl_py_str(HlCtx *h, HlLang const *L, iz b, iz q) {
+static iz hl_py_str(HlCtx *h, const HlLang *L, iz b, iz q) {
     u32 m = HL_S_ESC;
     for (iz k = b; k < q; k++) {
         u8 c = (u8)(h->p[k] | 32);
@@ -866,8 +866,8 @@ static iz hl_py_str(HlCtx *h, HlLang const *L, iz b, iz q) {
     return hl_str(h, L, b, q+o, d, m, HL_STRING);
 }
 
-static iz hl_lex_py(HlCtx *h, HlLang const *L, iz i, b32 nested) {
-    u8 const *p      = h->p;
+static iz hl_lex_py(HlCtx *h, const HlLang *L, iz i, b32 nested) {
+    const u8 *p      = h->p;
     iz        n      = h->n;
     iz        braces = 0;
     b32       bol    = 1;
@@ -984,9 +984,9 @@ static iz hl_heredoc(HlCtx *h, iz i) {
     return h->n;
 }
 
-static iz hl_lex_sh(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_sh(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p       = h->p;
+    const u8 *p       = h->p;
     iz        n       = h->n;
     b32       cmd     = 1;
     b32       forcase = 0;
@@ -1124,7 +1124,7 @@ static iz hl_lex_sh(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // Only the lines with a prompt are commands. A block without any prompt is
 // taken as a script.
-static iz hl_lex_console(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_console(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
     iz n    = h->n;
     b32 any = 0;
@@ -1151,9 +1151,9 @@ static iz hl_lex_console(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // PowerShell
 
-static iz hl_lex_ps(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_ps(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p    = h->p;
+    const u8 *p    = h->p;
     iz        n    = h->n;
     b32       deff = 0;
     while (i < n) {
@@ -1176,7 +1176,7 @@ static iz hl_lex_ps(HlCtx *h, HlLang const *L, iz i, b32 nested) {
         } else if (c=='@' && (hl_peek(h, i+1)=='"' || hl_peek(h, i+1)=='\'') &&
                 hl_peek(h, hl_skipblank(h, i+2))=='\n') {
             char t[4] = {'\n', (char)hl_peek(h, i+1), '@', 0};
-            iz   e    = hl_findmem(h, i+2, (u8 const *)t, 3, 0);
+            iz   e    = hl_findmem(h, i+2, (const u8 *)t, 3, 0);
             e = e<n ? e+3 : n;
             hl_emit(h, i, e, HL_STRING);
             i = e;
@@ -1275,8 +1275,8 @@ static iz hl_mk_scan(HlCtx *h, iz s, iz e) {
 
 // Variables, comments, and (in recipes) quoted strings in [i, e); other
 // text gets kind dflt.
-static void hl_mk_expr(HlCtx *h, HlLang const *L, iz i, iz e, HlKind dflt, b32 recipe) {
-    u8 const *p = h->p;
+static void hl_mk_expr(HlCtx *h, const HlLang *L, iz i, iz e, HlKind dflt, b32 recipe) {
+    const u8 *p = h->p;
     while (i < e) {
         u8 c = p[i];
         if (hl_isblank(c)) {
@@ -1302,8 +1302,8 @@ static void hl_mk_expr(HlCtx *h, HlLang const *L, iz i, iz e, HlKind dflt, b32 r
     }
 }
 
-static void hl_mk_line(HlCtx *h, HlLang const *L, iz b, iz e, b32 cont) {
-    u8 const *p = h->p;
+static void hl_mk_line(HlCtx *h, const HlLang *L, iz b, iz e, b32 cont) {
+    const u8 *p = h->p;
     if (cont) {
         hl_mk_expr(h, L, b, e, HL_PLAIN, 0);
         return;
@@ -1356,7 +1356,7 @@ static void hl_mk_line(HlCtx *h, HlLang const *L, iz b, iz e, b32 cont) {
     hl_mk_expr(h, L, s, e, HL_PLAIN, 0);
 }
 
-static iz hl_lex_make(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_make(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
     b32 cont = 0;
     while (i < h->n) {
@@ -1372,9 +1372,9 @@ static iz hl_lex_make(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // CMake
 
-static iz hl_lex_cmake(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_cmake(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     while (i < n) {
         u8 c = p[i];
@@ -1476,9 +1476,9 @@ static iz hl_toml_header(HlCtx *h, iz i) {
     return i;
 }
 
-static iz hl_lex_toml(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_toml(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p   = h->p;
+    const u8 *p   = h->p;
     iz        n   = h->n;
     b32       bol = 1;
     while (i < n) {
@@ -1560,7 +1560,7 @@ static HlKind hl_yaml_word(HlCtx *h, iz b, iz e) {
 
 // The colon ending a block key that starts at s, or -1.
 static iz hl_yaml_key(HlCtx *h, iz s, iz e) {
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     u8 c = p[s];
     if (c=='[' || c=='{' || c=='|' || c=='>' || c=='&' || c=='*' || c=='!' || c=='#') {
         return -1;
@@ -1588,8 +1588,8 @@ static iz hl_yaml_key(HlCtx *h, iz s, iz e) {
 // The rest of a line after its key, a "- ", or "---". col is the indent
 // of the node, for block scalars. Returns the start of the next line to
 // lex.
-static iz hl_yaml_value(HlCtx *h, HlLang const *L, iz s, iz e, iz col) {
-    u8 const *p     = h->p;
+static iz hl_yaml_value(HlCtx *h, const HlLang *L, iz s, iz e, iz col) {
+    const u8 *p     = h->p;
     b32       block = 0;
     while (s < e) {
         u8 c = p[s];
@@ -1673,9 +1673,9 @@ static iz hl_yaml_value(HlCtx *h, HlLang const *L, iz s, iz e, iz col) {
     return hl_next(h, last);
 }
 
-static iz hl_lex_yaml(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_yaml(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     while (i < n) {
         iz e = hl_eol(h, i);
@@ -1713,10 +1713,10 @@ static iz hl_lex_yaml(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // INI
 
-static iz hl_lex_ini(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_ini(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)L;
     (void)nested;
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     while (i < n) {
         iz e = hl_eol(h, i);
@@ -1766,15 +1766,15 @@ static iz hl_lex_ini(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // diff
 
-static iz hl_lex_diff(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_diff(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)L;
     (void)nested;
-    static char const *const heads[] = {
+    static const char *const heads[] = {
         "diff ", "index ", "new file", "deleted file", "old mode", "new mode",
         "similarity", "dissimilarity", "rename ", "copy ", "Binary files",
         "Index: ", "====", "*** ",
     };
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     b32       hdr = 0;      // the previous line was a "--- " header
     while (i < n) {
@@ -1809,9 +1809,9 @@ static iz hl_lex_diff(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // HTML and XML
 
-static iz hl_lex_html(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_html(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     while (i < n) {
         if (p[i] == '&') {
@@ -1918,7 +1918,7 @@ static iz hl_lex_html(HlCtx *h, HlLang const *L, iz i, b32 nested) {
             i = j;
             b32 script = hl_wordeq(h, nb, ne, "script");
             if (!close && !self && (script || hl_wordeq(h, nb, ne, "style"))) {
-                iz e = hl_findmem(h, i, (u8 const *)(script ? "</script" : "</style"),
+                iz e = hl_findmem(h, i, (const u8 *)(script ? "</script" : "</style"),
                         script ? 8 : 7, 1);
                 if (script) {
                     h->n = e;
@@ -1935,9 +1935,9 @@ static iz hl_lex_html(HlCtx *h, HlLang const *L, iz i, b32 nested) {
 
 // SQL
 
-static iz hl_lex_sql(HlCtx *h, HlLang const *L, iz i, b32 nested) {
+static iz hl_lex_sql(HlCtx *h, const HlLang *L, iz i, b32 nested) {
     (void)nested;
-    u8 const *p = h->p;
+    const u8 *p = h->p;
     iz        n = h->n;
     while (i < n) {
         u8 c = p[i];
@@ -2144,7 +2144,7 @@ static iz hl_lex_sql(HlCtx *h, HlLang const *L, iz i, b32 nested) {
     "row_number rank dense_rank lag lead extract date_trunc"
 
 
-static HlLang const hl_langs[HL_L_COUNT] = {
+static const HlLang hl_langs[HL_L_COUNT] = {
     [HL_L_C] = {"c h", HL_C_WORDS, 0, hl_lex_c, HL_F_PP, 0, 0},
     [HL_L_CPP] = {"cpp c++ cc cxx hpp hh", HL_C_WORDS, HL_CPP_WORDS, hl_lex_c,
         HL_F_PP|HL_F_RAWCPP|HL_F_SEP, 0, 0},
@@ -2180,7 +2180,7 @@ static HlLang const hl_langs[HL_L_COUNT] = {
 
 // API
 
-static HlLang const *hl_findlang(Str s) {
+static const HlLang *hl_findlang(Str s) {
     if (s.len<=0 || s.len>16) {
         return 0;
     }
@@ -2190,7 +2190,7 @@ static HlLang const *hl_findlang(Str s) {
     }
     t[s.len] = 0;
     for (i32 k = 0; k < HL_L_COUNT; k++) {
-        char const *a = hl_langs[k].names;
+        const char *a = hl_langs[k].names;
         while (*a) {
             while (*a == ' ') {
                 a++;
@@ -2214,7 +2214,7 @@ static b32 hl_known(Str lang) {
     return hl_findlang(lang) != 0;
 }
 
-static void hl_run(HlCtx *h, HlLang const *L) {
+static void hl_run(HlCtx *h, const HlLang *L) {
     h->count   = 0;
     h->pos     = 0;
     h->last    = HL_PLAIN;
@@ -2226,7 +2226,7 @@ static void hl_run(HlCtx *h, HlLang const *L) {
 }
 
 static HlSpans hl_highlight(Arena *a, Str lang, Str code) {
-    HlLang const *L = hl_findlang(lang);
+    const HlLang *L = hl_findlang(lang);
     if (!L || code.len<=0) {
         return (HlSpans){0};
     }

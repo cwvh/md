@@ -35,7 +35,7 @@ void *memset(void *dst, int c, uz len) {
     return r;
 }
 
-void *memcpy(void *dst, void const *src, uz len) {
+void *memcpy(void *dst, const void *src, uz len) {
     void *r = dst;
     __asm__ volatile ("rep movsb" : "+D"(dst), "+S"(src), "+c"(len) : : "memory");
     return r;
@@ -43,9 +43,9 @@ void *memcpy(void *dst, void const *src, uz len) {
 
 // Overlapping ranges: copy backward when the destination is above the
 // source. GCC also emits calls to this for loops that move bytes.
-void *memmove(void *dst, void const *src, uz len) {
+void *memmove(void *dst, const void *src, uz len) {
     u8       *d = dst;
-    u8 const *s = src;
+    const u8 *s = src;
     if (d<=s || d>=s+len) {
         return memcpy(dst, src, len);
     }
@@ -253,7 +253,7 @@ static iz utf8encode(u8 *s, i32 rune) {
 }
 
 // Decode the code point at s[*i], joining a surrogate pair, and advance *i.
-static i32 utf16next(c16 const *s, iz len, iz *i) {
+static i32 utf16next(const c16 *s, iz len, iz *i) {
     i32 rune = s[(*i)++];
     if (rune>=0xd800 && rune<=0xdbff &&
             *i<len && s[*i]>=0xdc00 && s[*i]<=0xdfff) {
@@ -265,7 +265,7 @@ static i32 utf16next(c16 const *s, iz len, iz *i) {
 // Convert UTF-16 to UTF-8. Lone surrogates become U+FFFD. Allocates
 // exactly the result size (no over-allocate and trim), so it composes
 // with guard pages.
-static Str fromutf16(Arena *a, c16 const *s, iz len) {
+static Str fromutf16(Arena *a, const c16 *s, iz len) {
     Str r = {0};
     u8  tmp[4];
     for (iz i = 0; i < len;) {

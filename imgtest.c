@@ -94,7 +94,7 @@ static b32 chance(u64 *s, u64 percent) {
 typedef struct {
     u64          seed;
     i64          iter;      // -1 outside the random tests
-    char const  *phase;
+    const char  *phase;
     Str          input;     // saved on failure
     Output      *out;
     b32          dead;
@@ -102,7 +102,7 @@ typedef struct {
 } Ctx;
 static Ctx ctx;
 
-static Str cstr(char const *s) {
+static Str cstr(const char *s) {
     iz n = 0;
     for (; s[n]; n++) {}
     return (Str){(u8 *)s, n};
@@ -162,7 +162,7 @@ static _Noreturn void context(void) {
     ExitProcess(1);
 }
 
-static _Noreturn void fail(char const *check, char const *what, i64 a, i64 b) {
+static _Noreturn void fail(const char *check, const char *what, i64 a, i64 b) {
     Output *o = ctx.out;
     if (ctx.dead) {
         ExitProcess(1);  // failed while reporting
@@ -295,7 +295,7 @@ static Str readpath(Arena *a, Str name) {
 
 // test/img/NAME. A missing file is a failure, not an empty input, except for
 // the one that is meant to be empty.
-static Str readimg(Rig *r, Arena *a, char const *name) {
+static Str readimg(Rig *r, Arena *a, const char *name) {
     Str  n = cstr(name);
     iz   d = r->dir.len;
     u8  *p = new(a, d + 5 + n.len, u8);
@@ -336,7 +336,7 @@ static i32 chan_diff(u32 a, u32 b) {
 }
 
 static u32 pixel_at(Image *im, i32 frame, i32 x, i32 y) {
-    u32 const *p = image_pixels(im, frame);
+    const u32 *p = image_pixels(im, frame);
     Size sz = os_image_size(im);
     assert(x>=0 && y>=0 && (f32)x<sz.w && (f32)y<sz.h);
     return p[(iz)y*(i32)sz.w + x];
@@ -367,7 +367,7 @@ typedef struct {
 } Px;
 
 typedef struct {
-    char const *file;
+    const char *file;
     i32  w, h, frames;
     i32  tol;                   // allowed difference per channel
     i32  delays[12];            // for animations, 0 for the rest
@@ -379,7 +379,7 @@ typedef struct {
 // Expected results, worked out from how each file was made (gen.py), not
 // from what the decoder says. The GIFs' colors are palette entries: 1 red,
 // 2 green, 3 blue.
-static Case const cases[] = {
+static const Case cases[] = {
     {"still.gif", 4, 3, 1, 0, {0}, {
         {0,0,0,RED}, {0,1,0,GREEN}, {0,2,0,BLUE}, {0,3,0,WHITE},
         {0,0,1,YELLOW}, {0,1,1,CYAN}, {0,2,1,MAGENTA}, {0,3,1,BLACK},
@@ -484,7 +484,7 @@ static Case const cases[] = {
 // EXIF orientation 1 to 8 of a picture whose corners are red (top left),
 // green (top right), blue (bottom left) and yellow (bottom right), in the
 // order top left, top right, bottom left, bottom right.
-static u32 const orient_corners[9][4] = {
+static const u32 orient_corners[9][4] = {
     {RED,    GREEN,  BLUE,   YELLOW},   // 1: as stored
     {GREEN,  RED,    YELLOW, BLUE},     // 2: mirrored
     {YELLOW, BLUE,   GREEN,  RED},      // 3: half a turn
@@ -497,18 +497,18 @@ static u32 const orient_corners[9][4] = {
 };
 
 // Files that must not decode.
-static char const *const refused[] = {
+static const char *const refused[] = {
     "empty.bin", "garbage.bin", "header.png", "trunc.png", "badhdr.png",
     "wide.png", "big.png", "huge.gif",
 };
 
 // Files that may or may not decode, but never crash. The valid ones are
 // also what the random test damages.
-static char const *const maybe[] = {
+static const char *const maybe[] = {
     "trunc.jpg", "trunc.gif", "corrupt.png",
 };
 
-static char const *const seeds[] = {
+static const char *const seeds[] = {
     "still.gif", "keep.gif", "background.gif", "previous.gif", "previous-first.gif",
     "transparent.gif", "offsets.gif", "outside.gif", "delays.gif", "interlaced.gif",
     "lsd0.gif", "mixed.gif", "alpha.png", "rgb.png", "palette.png", "gray.png",
@@ -520,7 +520,7 @@ static char const *const seeds[] = {
 // Checks that hold for any image that decoded
 
 static u64 hash_canvas(Image *im, i32 frame) {
-    u32 const *p = image_pixels(im, frame);
+    const u32 *p = image_pixels(im, frame);
     Size sz = os_image_size(im);
     iz   n  = (iz)sz.w * (iz)sz.h;
     u64  h  = 0xcbf29ce484222325ULL;
@@ -551,7 +551,7 @@ static void check_invariants(Image *im, u64 *s) {
         if (n == 1 ? d != 0 : d < 10) {
             fail("invariant", "delay", f, d);
         }
-        u32 const *p = image_pixels(im, f);
+        const u32 *p = image_pixels(im, f);
         for (iz i = 0; i < (iz)w*h; i++) {
             u32 a = p[i] >> 24;
             if ((p[i]>>16 & 255) > a || (p[i]>>8 & 255) > a || (p[i] & 255) > a) {
@@ -574,7 +574,7 @@ static void check_invariants(Image *im, u64 *s) {
     // animation is not reduced at all.
     i32 level = 5;
     i32 rw, rh;
-    u32 const *rp = image_reduced(im, &level, &rw, &rh);
+    const u32 *rp = image_reduced(im, &level, &rw, &rh);
     i32 ew = w;
     i32 eh = h;
     for (i32 k = 0; k < level; k++) {
@@ -596,7 +596,7 @@ static void check_invariants(Image *im, u64 *s) {
 // The known files
 
 // Decode a file, check what it looks like, free it, check nothing leaked.
-static void run_case(Rig *r, Case const *c) {
+static void run_case(Rig *r, const Case *c) {
     ctx.phase = c->file;
     alive();
     i32 blocks = imgstat.blocks;
@@ -634,7 +634,7 @@ static void run_case(Rig *r, Case const *c) {
             if (pass == 2 && np%7 == 0) {
                 i = (k*5 + 1) % np;
             }
-            Px const *p = c->px + i;
+            const Px *p = c->px + i;
             u32 got = pixel_at(im, p->frame, p->x, p->y);
             if (chan_diff(got, p->want) > c->tol) {
                 fail_pixel(r, p->frame, p->x, p->y, got, p->want);
@@ -652,7 +652,7 @@ static void run_case(Rig *r, Case const *c) {
 }
 
 static void run_orientation(Rig *r) {
-    static char const *const names[] = {
+    static const char *const names[] = {
         "orient1.jpg", "orient2.jpg", "orient3.jpg", "orient4.jpg", "orient5.jpg",
         "orient6.jpg", "orient7.jpg", "orient8.jpg", "orient9.jpg",
     };
@@ -734,7 +734,7 @@ static void run_reduced(Rig *r) {
     i32 want[] = {32, 16, 8, 4, 2, 1, 1, 1};
     for (i32 k = 0; k < 8; k++) {
         i32 level = k, w, h;
-        u32 const *p = image_reduced(im, &level, &w, &h);
+        const u32 *p = image_reduced(im, &level, &w, &h);
         if (level != k || w != want[k] || h != want[k]) {
             fail("reduced", "icon size", k, w);
         }
@@ -750,8 +750,8 @@ static void run_reduced(Rig *r) {
     // 3x3: red green blue / yellow cyan magenta / black gray white
     im = os_image_decode(readimg(r, &a, "rgb.png"));
     i32 level = 1, w, h;
-    u32 const *p = image_reduced(im, &level, &w, &h);
-    u32 const want1[] = {ARGB(255,128,191,64), ARGB(255,128,0,255),
+    const u32 *p = image_reduced(im, &level, &w, &h);
+    const u32 want1[] = {ARGB(255,128,191,64), ARGB(255,128,0,255),
                          ARGB(255,64,64,64),   WHITE};
     if (level != 1 || w != 2 || h != 2) {
         fail("reduced", "3x3 size", w, h);
@@ -795,7 +795,7 @@ static void run_reduced(Rig *r) {
 // WebP depends on the codec the system has. If it decodes, it must do so
 // properly.
 static void run_webp(Rig *r) {
-    static char const *const names[] = {"lossless.webp", "lossy.webp"};
+    static const char *const names[] = {"lossless.webp", "lossy.webp"};
     for (iz i = 0; i < countof(names); i++) {
         ctx.phase = names[i];
         Arena a = r->files;
@@ -820,11 +820,11 @@ static void run_webp(Rig *r) {
 // GIFs of many frames, built here: each 1x1, black, with a delay of 20 ms.
 
 static Str many_gif(Arena *a, i32 frames) {
-    static u8 const head[] = {
+    static const u8 head[] = {
         'G','I','F','8','9','a', 1,0, 1,0, 0x80, 0, 0,
         0,0,0, 255,255,255,
     };
-    static u8 const frame[] = {
+    static const u8 frame[] = {
         0x21,0xf9,0x04, 0x00, 2,0, 0, 0,                // delay 20 ms, no transparency
         0x2c, 0,0, 0,0, 1,0, 1,0, 0,                    // 1x1 at the origin
         0x02, 0x02, 0x44, 0x01, 0x00,                   // one pixel, index 0
@@ -974,8 +974,8 @@ static void iteration(Rig *r, u64 seed, i64 iter) {
     alive();
 
     Arena a = r->files;
-    char const *name  = seeds[rnd(&s, (u64)countof(seeds))];
-    char const *name2 = seeds[rnd(&s, (u64)countof(seeds))];
+    const char *name  = seeds[rnd(&s, (u64)countof(seeds))];
+    const char *name2 = seeds[rnd(&s, (u64)countof(seeds))];
     Str base  = readimg(r, &a, name);
     Str other = readimg(r, &a, name2);
     Bytes b = {new(&a, base.len + 64, u8), base.len, base.len + 64};

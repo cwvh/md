@@ -223,13 +223,13 @@ static void os_clip_pop(void) {
 // os_para_rects.
 
 typedef struct {
-    DwInlineVtbl const *v;
+    const DwInlineVtbl *v;
     i32 refs;
     f32 w;
     f32 h;
 } Box;
 
-static i32 box_query(void *self, Guid const *iid, void **out) {
+static i32 box_query(void *self, const Guid *iid, void **out) {
     if (guideq(iid, &iid_unknown) || guideq(iid, &iid_dw_inline)) {
         *out = self;
         Box *b = self;
@@ -379,7 +379,7 @@ static void os_para_free(Paragraph *p) {
     }
 }
 
-static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
+static Paragraph *os_para_new(const Run *runs, iz nruns, f32 max_width) {
     if (!gfx.dw) {
         return 0;
     }
@@ -407,7 +407,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
     iz u = 0;
     iz w = 0;
     for (iz i = 0; i < nruns; i++) {
-        Run const *r  = runs + i;
+        const Run *r  = runs + i;
         PRun      *pr = p->runs + i;
         pr->wbeg  = (u32)w;
         pr->color = r->color;
@@ -454,7 +454,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
     p->layout = lay;
 
     for (iz i = 0; i < nruns; i++) {
-        Run const *r  = runs + i;
+        const Run *r  = runs + i;
         PRun      *pr = p->runs + i;
         if (!pr->wlen) {
             continue;
@@ -649,7 +649,7 @@ static void os_image_draw(Image *im, i32 frame, Rect dst) {
     for (i32 level = want; !im->bitmap; level++) {
         i32 w, h;
         i32 got = level;
-        u32 const *px = image_reduced(im, &got, &w, &h);
+        const u32 *px = image_reduced(im, &got, &w, &h);
         void *b = 0;
         if (!FAILED(COM(gfx.rt, CreateBitmap, (D2dSizeU){(u32)w, (u32)h}, px, (u32)w*4,
                         &props, &b))) {

@@ -74,7 +74,7 @@ typedef struct {
 } FDrawImage;
 
 typedef struct {
-    u8 const *path;
+    const u8 *path;
     iz        pathlen;
     Str       data;
 } FFile;
@@ -249,7 +249,7 @@ static void fk_relayout(Paragraph *p) {
     p->size = (Size){maxw, top};
 }
 
-static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
+static Paragraph *os_para_new(const Run *runs, iz nruns, f32 max_width) {
     Paragraph *p = fk_alloc(1, (iz)sizeof(Paragraph));
     iz total = 0;
     for (iz i = 0; i < nruns; i++) {
@@ -260,7 +260,7 @@ static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width) {
     p->width = max_width > 0 ? max_width : 0;
     iz at = 0;
     for (iz i = 0; i < nruns; i++) {
-        Run const *r = runs + i;
+        const Run *r = runs + i;
         if (r->box_w>0 && r->box_h>0) {
             memcpy(p->text + at, "\xEF\xBF\xBC", 3);
             FUnit *u = p->units + p->nunits++;
@@ -500,7 +500,7 @@ static Image *os_image_decode(Str bytes) {
     if (bytes.len < 11 || !equals((Str){bytes.data, 4}, S("FIMG"))) {
         return 0;
     }
-    u8 const *b = bytes.data;
+    const u8 *b = bytes.data;
     Image *im = fk_alloc(1, (iz)sizeof(Image));
     im->w      = (f32)(b[4] | b[5]<<8);
     im->h      = (f32)(b[6] | b[7]<<8);

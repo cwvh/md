@@ -154,7 +154,7 @@ static b32 on_worker(void (*fn)(void *), void *arg) {
 }
 
 // An integer metadata value, if the file has it.
-static b32 query_int(WicQuery *q, c16 const *name, i32 *out) {
+static b32 query_int(WicQuery *q, const c16 *name, i32 *out) {
     PropVar pv = {0};
     if (!q || FAILED(COM(q, GetMetadataByName, name, &pv))) {
         return 0;
@@ -232,7 +232,7 @@ static u32 blend(u32 s, u32 d) {
 
 // The frame's rectangle clipped to the canvas, which is empty for a frame
 // that lies outside it.
-static b32 gif_clip(Image *im, GifFrame const *g, i32 *x0, i32 *y0, i32 *x1, i32 *y1) {
+static b32 gif_clip(Image *im, const GifFrame *g, i32 *x0, i32 *y0, i32 *x1, i32 *y1) {
     *x0 = g->left;
     *y0 = g->top;
     *x1 = min(g->left + g->w, im->w);
@@ -279,7 +279,7 @@ static void gif_info(Image *im, i32 i, WicFrame *f) {
     com_put(q);
 }
 
-static void gif_dispose(Image *im, GifFrame const *g) {
+static void gif_dispose(Image *im, const GifFrame *g) {
     if (g->disposal == GIF_BACKGROUND) {
         i32 x0, y0, x1, y1;
         if (gif_clip(im, g, &x0, &y0, &x1, &y1)) {
@@ -294,7 +294,7 @@ static void gif_dispose(Image *im, GifFrame const *g) {
 
 // Draw frame f over the canvas, clipped to it. Returns 0 if the pixels could
 // not be read.
-static b32 gif_paint(Image *im, GifFrame const *g, WicFrame *f) {
+static b32 gif_paint(Image *im, const GifFrame *g, WicFrame *f) {
     i32 x0, y0, x1, y1;
     if (!gif_clip(im, g, &x0, &y0, &x1, &y1)) {
         return 1;
@@ -336,7 +336,7 @@ static b32 gif_next(Image *im, i32 i) {
     if (!im->fr[i].known) {
         gif_info(im, i, f);
     }
-    GifFrame const *g = im->fr + i;
+    const GifFrame *g = im->fr + i;
     if (i > 0) {
         gif_dispose(im, im->fr + i - 1);
     }
@@ -637,7 +637,7 @@ static i32 os_image_delay(Image *im, i32 frame) {
 
 // The composited pixels of a frame: w*h premultiplied BGRA, valid until the
 // next call. A still image has the one frame.
-static u32 const *image_pixels(Image *im, i32 frame) {
+static const u32 *image_pixels(Image *im, i32 frame) {
     frame = max((i32)0, min(frame, im->nframes - 1));
     if (im->fr && frame != im->cur) {
         Job j = {{0}, im, frame, 0};
@@ -648,12 +648,12 @@ static u32 const *image_pixels(Image *im, i32 frame) {
 
 // Half the size, rounding up, each pixel the average of the four it covers
 // (the edge ones count twice when the side is odd).
-static void halve(u32 const *s, i32 w, i32 h, u32 *d) {
+static void halve(const u32 *s, i32 w, i32 h, u32 *d) {
     i32 nw = (w + 1)/2;
     i32 nh = (h + 1)/2;
     for (i32 y = 0; y < nh; y++) {
-        u32 const *r0 = s + (iz)(2*y)*w;
-        u32 const *r1 = s + (iz)min(2*y + 1, h - 1)*w;
+        const u32 *r0 = s + (iz)(2*y)*w;
+        const u32 *r1 = s + (iz)min(2*y + 1, h - 1)*w;
         for (i32 x = 0; x < nw; x++) {
             i32 x0 = 2*x;
             i32 x1 = min(x0 + 1, w - 1);
@@ -674,8 +674,8 @@ static void halve(u32 const *s, i32 w, i32 h, u32 *d) {
 // skips pixels and shimmers. Takes the level wanted and gives the level it
 // got (an animation is never reduced) and the size at that level. Valid as
 // long as the image.
-static u32 const *image_reduced(Image *im, i32 *level, i32 *w, i32 *h) {
-    u32 const *p = im->canvas;
+static const u32 *image_reduced(Image *im, i32 *level, i32 *w, i32 *h) {
+    const u32 *p = im->canvas;
     i32 pw  = im->w;
     i32 ph  = im->h;
     i32 got = 0;

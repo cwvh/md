@@ -36,7 +36,7 @@ typedef struct {
 #define HEX(h)      {((h)>>16)&255, ((h)>>8)&255, (h)&255, 255}
 #define HEXA(h, a)  {((h)>>16)&255, ((h)>>8)&255, (h)&255, (a)}
 
-static Theme const theme_light = {
+static const Theme theme_light = {
     .bg = HEX(0xffffff), .text = HEX(0x1f2328), .muted = HEX(0x59636e),
     .link = HEX(0x0969da), .border = HEX(0xd1d9e0), .rule = HEX(0xd1d9e0),
     .code_bg = HEX(0xf6f8fa), .inline_bg = HEXA(0x818b98, 40),
@@ -55,7 +55,7 @@ static Theme const theme_light = {
     },
 };
 
-static Theme const theme_dark = {
+static const Theme theme_dark = {
     .bg = HEX(0x0d1117), .text = HEX(0xe6edf3), .muted = HEX(0x9198a1),
     .link = HEX(0x4493f8), .border = HEX(0x3d444d), .rule = HEX(0x3d444d),
     .code_bg = HEX(0x151b23), .inline_bg = HEXA(0x6e7681, 90),
@@ -91,9 +91,9 @@ enum {
     M_MAX_LIVE   = 500,         // paragraphs kept before the far ones are freed
 };
 
-static f32 const line_body = 24;            // 1.5 em
-static f32 const code_scale = 0.85f;
-static f32 const heading_size[7] = {16, 32, 24, 20, 16, 14, 13.6f};
+static const f32 line_body = 24;            // 1.5 em
+static const f32 code_scale = 0.85f;
+static const f32 heading_size[7] = {16, 32, 24, 20, 16, 14, 13.6f};
 
 
 // The tree, flattened
@@ -212,7 +212,7 @@ static struct {
     Decor       *decors;
     i32          nleaves, ndecors;
     ImgEntry    *imgs[64];
-    Theme const *th;
+    const Theme *th;
     f32          zoom, winw, colx, colw, total;
     u32          epoch;         // changes when heights are no longer exact
     i32          nlive;         // paragraphs alive
@@ -297,7 +297,7 @@ static void para_free(Paragraph *p) {
     }
 }
 
-static Paragraph *para_new(Run const *runs, iz n, f32 w) {
+static Paragraph *para_new(const Run *runs, iz n, f32 w) {
     Paragraph *p = os_para_new(runs, n, w);
     if (p) {
         D.nlive++;
@@ -540,7 +540,7 @@ static void rb_init(RB *rb, Arena *a) {
     rb_reset(rb);
 }
 
-static b32 run_same(Run const *a, Run const *b) {
+static b32 run_same(const Run *a, const Run *b) {
     return a->font==b->font && a->size==b->size && a->bold==b->bold &&
            a->italic==b->italic && a->strike==b->strike && a->underline==b->underline &&
            a->link==b->link && a->color.r==b->color.r && a->color.g==b->color.g &&
@@ -566,7 +566,7 @@ static b32 rb_slot(RB *rb) {
     return 1;
 }
 
-static void rb_text(RB *rb, Str s, Run const *st) {
+static void rb_text(RB *rb, Str s, const Run *st) {
     if (!s.len || rb->over) {
         return;
     }
@@ -600,7 +600,7 @@ static void rb_text(RB *rb, Str s, Run const *st) {
     rb->atstart = 0;
 }
 
-static void rb_box(RB *rb, Run const *st, f32 w, f32 h, ImgEntry *img, iz alt) {
+static void rb_box(RB *rb, const Run *st, f32 w, f32 h, ImgEntry *img, iz alt) {
     if (!rb_slot(rb)) {
         return;
     }
@@ -659,7 +659,7 @@ static i32 rb_trailing_newlines(RB *rb) {
 }
 
 // Make the text so far end in at least want newlines, unless it is empty.
-static void rb_newlines(RB *rb, i32 want, Run const *st) {
+static void rb_newlines(RB *rb, i32 want, const Run *st) {
     if (rb->len == 0) {
         return;
     }
@@ -694,7 +694,7 @@ static void rb_trim(RB *rb) {
 }
 
 // One code point of text, collapsing white space like HTML does.
-static void rb_html_char(RB *rb, i32 c, Run const *st) {
+static void rb_html_char(RB *rb, i32 c, const Run *st) {
     if (c==' ' || c=='\t' || c=='\n' || c=='\r') {
         if (!rb->atstart && !rb->lastspace) {
             rb_text(rb, S(" "), st);
@@ -707,7 +707,7 @@ static void rb_html_char(RB *rb, i32 c, Run const *st) {
     rb->lastspace = 0;
 }
 
-static void rb_html_text(RB *rb, Str s, Run const *st) {
+static void rb_html_text(RB *rb, Str s, const Run *st) {
     for (iz i = 0; i < s.len;) {
         i32 c1 = 0, c2 = 0;
         iz  e  = s.data[i]=='&' ? md_entity(s, i, &c1, &c2) : 0;
@@ -772,7 +772,7 @@ static ImgEntry *img_get(Str src) {
 
 // An image: a box the size of the picture, or its alt text in a border. reqw
 // and reqh are the sizes asked for in the document, already scaled, or 0.
-static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, Run const *st) {
+static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, const Run *st) {
     // Finding links and plain text need no pictures.
     ImgEntry *e = src.len && !rb->find && !rb->plain ? img_get(src) : 0;
     Str text = alt.len ? alt : url_name(src);
@@ -810,7 +810,7 @@ static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, Run const *st
     }
 }
 
-static void html_img(RB *rb, HtmlTag const *t, Run const *st) {
+static void html_img(RB *rb, const HtmlTag *t, const Run *st) {
     Str src = html_attr(t->attrs, S("src"));
     Str alt = html_attr(t->attrs, S("alt"));
     rb_image(rb, src.data ? src : (Str){0}, alt.data ? alt : (Str){0},
@@ -818,7 +818,7 @@ static void html_img(RB *rb, HtmlTag const *t, Run const *st) {
              html_dim(html_attr(t->attrs, S("height")), rb->avail), st);
 }
 
-static void html_align(RB *rb, HtmlTag const *t) {
+static void html_align(RB *rb, const HtmlTag *t) {
     Str a = html_attr(t->attrs, S("align"));
     if (a.data && rb->align == ALIGN_LEFT) {
         if (ci_equals(a, S("center"))) {
@@ -831,7 +831,7 @@ static void html_align(RB *rb, HtmlTag const *t) {
 
 // Apply one tag to the running style st; base is the style at the start of
 // the enclosing sequence, which closing tags go back to.
-static void html_apply(RB *rb, HtmlTag const *t, Run *st, Run const *base) {
+static void html_apply(RB *rb, const HtmlTag *t, Run *st, const Run *base) {
     if (t->comment) {
         return;
     }
@@ -935,7 +935,7 @@ static void html_runs(RB *rb, Str s, Run base) {
 static void inl_walk(RB *rb, MdNode *parent, Run st);
 
 // A raw HTML node inside a paragraph holds a single tag.
-static void inl_html(RB *rb, MdNode *c, Run *st, Run const *base) {
+static void inl_html(RB *rb, MdNode *c, Run *st, const Run *base) {
     HtmlTag t;
     if (c->text.len && c->text.data[0]=='<' && html_tag(c->text, 0, &t)) {
         html_apply(rb, &t, st, base);
@@ -1267,7 +1267,7 @@ static void doc_clear(void) {
             }
         }
     }
-    Theme const *th = D.th;
+    const Theme *th = D.th;
     f32 zoom = D.zoom, winw = D.winw;
     u32 epoch = D.epoch + 1;
     memset(&D, 0, sizeof(D));
@@ -1289,7 +1289,7 @@ static void doc_column(void) {
 
 // Set the window width, zoom and theme. Heights stay exact if the width and
 // zoom did not change.
-static void doc_configure(f32 winw, f32 zoom, Theme const *th) {
+static void doc_configure(f32 winw, f32 zoom, const Theme *th) {
     f32 oldw = D.colw, oldz = D.zoom;
     b32 style = th != D.th || zoom != oldz;
     D.winw = winw;
@@ -1413,7 +1413,7 @@ static HlSpans code_spans(Decor *d, Arena *scratch) {
 }
 
 // Code text with tabs expanded to the next multiple of four columns.
-static void rb_code(RB *rb, Str s, Run const *st) {
+static void rb_code(RB *rb, Str s, const Run *st) {
     while (s.len) {
         if (s.data[0] == '\t') {
             u8 sp[4] = {' ', ' ', ' ', ' '};
@@ -1483,7 +1483,7 @@ static void code_runs(RB *rb, Leaf *l) {
 // Collect the runs for a leaf that is one paragraph of text.
 static void leaf_runs(RB *rb, Leaf *l) {
     f32   z  = D.zoom;
-    Theme const *t = D.th;
+    const Theme *t = D.th;
     Color fg = l->flags & LF_MUTED ? t->muted : t->text;
     rb->avail = max(l->w - 2*l->padl, (f32)8);
     switch (l->kind) {
@@ -1744,7 +1744,7 @@ static i32 doc_find_slug(Str slug) {
 // with its leaf. The position is the leaf under *scroll, or pin if pinned
 // (jumps, resizes), or the end of the document if pin_end. Returns the leaf
 // range on screen through lo and hi.
-static void doc_ensure(RB *rb, f32 *scroll, f32 viewh, Anchor const *pin,
+static void doc_ensure(RB *rb, f32 *scroll, f32 viewh, const Anchor *pin,
                        b32 pin_end) {
     Anchor a = pin ? *pin : doc_anchor(*scroll);
     f32 over = 100*D.zoom;
@@ -2170,7 +2170,7 @@ static iz para_of_plain(RB *rb, iz off) {
 
 // The first match of the folded query in the segment at or after from, or -1.
 static iz fold_find(Seg s, Str fq, iz from) {
-    u8 const *h  = s.p + s.len;
+    const u8 *h  = s.p + s.len;
     iz        hn = s.len;
     if (fq.len == 0 || fq.len > hn) {
         return -1;
@@ -2497,7 +2497,7 @@ typedef struct {
     iz  n;
 } Sink;
 
-static void sink_put(Sink *k, u8 const *p, iz n) {
+static void sink_put(Sink *k, const u8 *p, iz n) {
     if (n > 0) {
         if (k->out) {
             memcpy(k->out + k->n, p, (uz)n);
@@ -2673,7 +2673,7 @@ static b32 marks_on(void) {
 // paragraph. If boxes, rb holds a normal run of it and the range of the
 // paragraph that is selected goes to tint, for the images in it.
 static void draw_marks(i32 leaf, i32 cell, Seg s, Paragraph *p, Point o, RB *rb, b32 boxes, iz *tint) {
-    Theme const *t = D.th;
+    const Theme *t = D.th;
     if (D.find_q.len) {
         i32 guard = 0;
         for (iz at = 0; guard < 2000; guard++) {
@@ -2694,7 +2694,7 @@ static void draw_marks(i32 leaf, i32 cell, Seg s, Paragraph *p, Point o, RB *rb,
     }
 }
 
-static void draw_boxes(RB *rb, Paragraph *p, Point o, iz const *tint) {
+static void draw_boxes(RB *rb, Paragraph *p, Point o, const iz *tint) {
     for (iz i = 0; i < rb->nboxes; i++) {
         // The platform says where the box is horizontally and on which line;
         // its size is known, and it stands on the baseline.
@@ -2729,7 +2729,7 @@ static void draw_table(Leaf *l, i32 leaf, f32 x, f32 y, RB *rb) {
     if (!tb || !tb->built) {
         return;
     }
-    Theme const *t = D.th;
+    const Theme *t = D.th;
     f32 w = tb->colx[tb->ncols] + 1;
     f32 padx = tb->padx, pady = M_CELL_PADY*z;
     // Alternate rows, then the grid, then the text.
@@ -2797,7 +2797,7 @@ static void draw_item(Decor *d, f32 scroll, f32 viewh) {
     if (l->y - scroll > viewh || l->y + min(l->h, (f32)60*z) - scroll < 0) {
         return;
     }
-    Theme const *t = D.th;
+    const Theme *t = D.th;
     f32 lh;
     f32 base = leaf_baseline(l, &lh) - scroll;
     f32 cl   = D.colx + min((d->x + M_LIST)*z, D.colw*0.6f);   // where its content starts
@@ -2853,7 +2853,7 @@ static void draw_item(Decor *d, f32 scroll, f32 viewh) {
 
 static void doc_paint(f32 scroll, Size size, RB *rb) {
     f32 z  = D.zoom;
-    Theme const *t = D.th;
+    const Theme *t = D.th;
     D.anim = 0;
     for (i32 h = 0; h < 64; h++) {
         for (ImgEntry *e = D.imgs[h]; e; e = e->next) {

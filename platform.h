@@ -98,7 +98,7 @@ typedef struct Paragraph Paragraph;
 // offsets below index into it. Fonts: missing glyphs fall back to other
 // system fonts, so any script and color emoji render without portable code
 // doing anything. Returns 0 on failure. Free with os_para_free.
-static Paragraph *os_para_new(Run const *runs, iz nruns, f32 max_width);
+static Paragraph *os_para_new(const Run *runs, iz nruns, f32 max_width);
 
 // Re-wrap at a new width without rebuilding. Cheap compared to os_para_new,
 // so use it when only the window width changed.

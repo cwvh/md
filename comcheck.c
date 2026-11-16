@@ -429,7 +429,7 @@ _Static_assert(sizeof(D2dPoint) == 8, "passed by value in one register");
 
 static int failures;
 
-static void guid(char const *name, Guid const *ours, GUID const *theirs) {
+static void guid(const char *name, const Guid *ours, const GUID *theirs) {
     if (memcmp(ours, theirs, sizeof(GUID))) {
         printf("comcheck: GUID %s differs\n", name);
         failures++;

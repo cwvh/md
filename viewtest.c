@@ -64,7 +64,7 @@ static f32 rndf(u64 *s, f32 lo, f32 hi) {
 typedef struct {
     u64         seed;
     i64         iter;
-    char const *phase;
+    const char *phase;
     Output     *out;
     b32         dead;
     u64         checks;     // how many CHECKs passed
@@ -73,7 +73,7 @@ typedef struct {
 } Ctx;
 static Ctx ctx;
 
-static Str cstr(char const *s) {
+static Str cstr(const char *s) {
     iz n = 0;
     for (; s[n]; n++) {}
     return (Str){(u8 *)s, n};
@@ -111,7 +111,7 @@ static _Noreturn void context(void) {
     ExitProcess(1);
 }
 
-static _Noreturn void fail(char const *check, char const *what, i64 a, i64 b) {
+static _Noreturn void fail(const char *check, const char *what, i64 a, i64 b) {
     Output *o = ctx.out;
     if (ctx.dead) {
         ExitProcess(1);
@@ -220,7 +220,7 @@ static void bput(Buf *b, Str s) {
     b->len += s.len;
 }
 
-static void bs(Buf *b, char const *s) {
+static void bs(Buf *b, const char *s) {
     bput(b, cstr(s));
 }
 
@@ -248,16 +248,16 @@ static Str keep(Str s) {
     return (Str){d, s.len};
 }
 
-static void put(char const *path, Str data) {
+static void put(const char *path, Str data) {
     fk_put(keep(cstr(path)), keep(data));
 }
 
-static void put_s(char const *path, char const *data) {
+static void put_s(const char *path, const char *data) {
     put(path, cstr(data));
 }
 
 // A fake image.
-static void put_img(char const *path, i32 w, i32 h, i32 frames, i32 delay) {
+static void put_img(const char *path, i32 w, i32 h, i32 frames, i32 delay) {
     u8 b[11] = {'F', 'I', 'M', 'G', (u8)w, (u8)(w>>8), (u8)h, (u8)(h>>8), (u8)frames,
                 (u8)delay, (u8)(delay>>8)};
     put(path, (Str){b, 11});
@@ -281,7 +281,7 @@ static void paint(void) {
     alive();
 }
 
-static void start(char const *path, f32 w, f32 h) {
+static void start(const char *path, f32 w, f32 h) {
     fk.window = (Size){w, h};
     Arena p   = rig.perm;
     app_init(&p, path ? cstr(path) : (Str){0}, fk.window);
@@ -373,7 +373,7 @@ static void check_texts(void);
 
 // A position names a place in the text: a leaf, a cell of it if a table,
 // and a character boundary.
-static void check_pos(DocPos p, char const *what) {
+static void check_pos(DocPos p, const char *what) {
     CHECK2(p.leaf >= 0 && p.leaf < D.nleaves, what, p.leaf, D.nleaves);
     Leaf *l = D.leaves + p.leaf;
     Arena s = rig.scratch;
@@ -497,25 +497,25 @@ static b32 goto_text(Str needle, Point *pos) {
     return goto_span(needle, pos, 0);
 }
 
-static void click_text(char const *needle) {
+static void click_text(const char *needle) {
     Point p;
     CHECK2(goto_text(cstr(needle), &p), "text not found", 0, 0);
     click(p);
     paint();
 }
 
-static b32 path_is(char const *p) {
+static b32 path_is(const char *p) {
     return equals((Str){V.path, V.pathlen}, cstr(p));
 }
 
-static b32 title_is(char const *t) {
+static b32 title_is(const char *t) {
     return equals((Str){fk.title, fk.titlelen}, cstr(t));
 }
 
 
 // Fixed documents
 
-static char const doc_all[] =
+static const char doc_all[] =
     "<p align=\"center\"><img src=\"img/a.fimg\" width=\"20\"></p>\n"
     "\n"
     "# Title *with* `code`\n"
@@ -612,8 +612,8 @@ static void setup_files(void) {
 }
 
 // Widths and zooms the layout must hold up at.
-static f32 const test_widths[] = {160, 200, 320, 480, 700, 900, 1000, 1500, 2400};
-static f32 const test_zooms[]  = {0.5f, 1, 1.5f, 3};
+static const f32 test_widths[] = {160, 200, 320, 480, 700, 900, 1000, 1500, 2400};
+static const f32 test_zooms[]  = {0.5f, 1, 1.5f, 3};
 
 static void test_layout(void) {
     ctx.phase = "layout";
@@ -1223,7 +1223,7 @@ static b32 valid_utf8(Str s) {
     return 1;
 }
 
-static void expect_str(Str got, char const *want, char const *what) {
+static void expect_str(Str got, const char *want, const char *what) {
     if (!equals(got, cstr(want))) {
         Output *o = ctx.out;
         print(o, S("--- "));
@@ -1238,7 +1238,7 @@ static void expect_str(Str got, char const *want, char const *what) {
 }
 
 // Ctrl+C, and what it put on the clipboard.
-static void expect_copy(char const *want, char const *what) {
+static void expect_copy(const char *want, const char *what) {
     fk.clipset = 0;
     key(KEY_C, MOD_PRIMARY);
     CHECK2(fk.clipset, what, 0, 0);
@@ -1256,7 +1256,7 @@ static void drag(Point a, Point b) {
 
 // Select from the first character of one text to the last of another, the
 // way a person would: by dragging. The whole document must fit the window.
-static void select_text(char const *from, char const *to) {
+static void select_text(const char *from, const char *to) {
     Point a, ae, b, be;
     if (!goto_span(cstr(to), &b, &be) || !goto_span(cstr(from), &a, &ae)) {
         print(ctx.out, S("select_text: "));
@@ -1284,7 +1284,7 @@ static void dbl_click(Point p) {
     app_mouse_up(p, BUTTON_LEFT, 0);
 }
 
-static char const doc_copy_md[] =
+static const char doc_copy_md[] =
     "# Title and *more*\n"
     "\n"
     "Para one with **bold** and `code` and a [link](https://x.org). Second\n"
@@ -1673,7 +1673,7 @@ static void test_sel_scroll(void) {
     CHECK2(fk.live_paras == 0, "leak", fk.live_paras, 0);
 }
 
-static char const doc_find_md[] =
+static const char doc_find_md[] =
     "# Find Fixture\n"
     "\n"
     "The quick brown fox. Fox again, and FOX.\n"
@@ -1696,7 +1696,7 @@ static char const doc_find_md[] =
     "\n"
     "Last paragraph without it.\n";
 
-static void type_text(char const *s) {
+static void type_text(const char *s) {
     Str t = cstr(s);
     while (t.len) {
         Utf8 d = utf8decode(t);
@@ -1719,7 +1719,7 @@ static Str find_cur_folded(void) {
 }
 
 // The current match is a match, and in the window.
-static void check_find_here(char const *what) {
+static void check_find_here(const char *what) {
     Find *f = &V.find;
     CHECK2(f->have && f->n >= 1 && f->n <= f->total, what, f->n, f->total);
     CHECK(equals(find_cur_folded(), (Str){f->fold, f->len}), "the current match is the query");
@@ -2179,7 +2179,7 @@ static void test_sel_empty(void) {
     put_s("/e/empty.md", "");
     put_s("/e/comment.md", "<!-- nothing to see -->\n");
     put_s("/e/rule.md", "---\n");
-    char const *const paths[] = {"/e/empty.md", "/e/comment.md", "/e/rule.md"};
+    const char *const paths[] = {"/e/empty.md", "/e/comment.md", "/e/rule.md"};
     for (i32 i = 0; i < 3; i++) {
         start(paths[i], 600, 400);
         paint();
@@ -2233,7 +2233,7 @@ static void test_all(void) {
 
 // Random documents
 
-static char const *const words[] = {
+static const char *const words[] = {
     "alpha", "beta", "gamma", "delta", "lorem", "ipsum", "dolor", "sit", "amet", "the", "quick",
     "brown", "fox", "jumps", "over", "lazy", "dog", "日本語", "中文", "😀", "ünï" "cödé", "a", "of",
 };
@@ -2438,7 +2438,7 @@ static void random_op(u64 *r) {
         app_wheel((Point){rndf(r, 0, w.w), rndf(r, 0, w.h)}, 0, rndf(r, -6, 6), 0);
         break;
     case 5: case 6: {
-        static Key const ks[] = {KEY_UP, KEY_DOWN, KEY_PGUP, KEY_PGDN, KEY_HOME, KEY_END, KEY_SPACE,
+        static const Key ks[] = {KEY_UP, KEY_DOWN, KEY_PGUP, KEY_PGDN, KEY_HOME, KEY_END, KEY_SPACE,
                                  KEY_LEFT, KEY_RIGHT, KEY_BACKSPACE, KEY_F5, KEY_TAB, KEY_A};
         key(ks[rnd(r, countof(ks))], (u32)rnd(r, 8));
         break;
@@ -2570,13 +2570,13 @@ static void random_op(u64 *r) {
                 u = d.tail;
             }
         } else {
-            static i32 const odd[] = {' ', 0x7f, 0x1f, 0xfffd, 0x10000, 0x1f600, 0xd800, 'A', 0xdc00, 0x110000, -1};
+            static const i32 odd[] = {' ', 0x7f, 0x1f, 0xfffd, 0x10000, 0x1f600, 0xd800, 'A', 0xdc00, 0x110000, -1};
             app_char(odd[rnd(r, countof(odd))]);
         }
         break;
     }
     case 42: case 43: {
-        static Key const fk_[] = {KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
+        static const Key fk_[] = {KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
                                   KEY_F3, KEY_V, KEY_C, KEY_X, KEY_A, KEY_G, KEY_INSERT, KEY_SPACE, KEY_ESCAPE};
         key(fk_[rnd(r, countof(fk_))], (u32)rnd(r, 8));
         break;
@@ -2593,7 +2593,7 @@ static void random_op(u64 *r) {
             fk.clip    = fk_alloc(40, 1);
             fk.cliplen = 0;
             for (iz n = (iz)rnd(r, 20); n > 0; n--) {
-                static Str const pool[] = {S("a"), S("b"), S(" "), S("\n"), S("\r\n"), S("\xC3\xA9"), S("x")};
+                static const Str pool[] = {S("a"), S("b"), S(" "), S("\n"), S("\r\n"), S("\xC3\xA9"), S("x")};
                 Str t = pool[rnd(r, countof(pool))];
                 memcpy(fk.clip + fk.cliplen, t.data, (uz)t.len);
                 fk.cliplen += t.len;
@@ -2736,7 +2736,7 @@ static void test_time(void) {
     paint();
     key(KEY_F, MOD_PRIMARY);
     i64 first = 0, rest = 0;
-    char const *query = "dolor";
+    const char *query = "dolor";
     for (i32 i = 0; query[i]; i++) {
         i64 a = now_us();
         app_char(query[i]);

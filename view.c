@@ -106,7 +106,7 @@ static struct {
     i32       nhist, cur;
 } V;
 
-static f32 const zoom_levels[] = {
+static const f32 zoom_levels[] = {
     0.5f, 0.67f, 0.8f, 0.9f, 1, 1.1f, 1.25f, 1.5f, 1.75f, 2, 2.5f, 3, 4,
 };
 
@@ -319,7 +319,7 @@ static void set_title(void) {
     os_set_title((Str){buf, n + 5});
 }
 
-static Theme const *current_theme(void) {
+static const Theme *current_theme(void) {
     return V.dark ? &theme_dark : &theme_light;
 }
 
@@ -932,7 +932,7 @@ static void draw_find(void) {
     if (!f->open) {
         return;
     }
-    Theme const *t = current_theme();
+    const Theme *t = current_theme();
     FindGeo g = find_geo();
     os_fill_rrect(g.bar, 6, t->status_bg);
     os_stroke_rrect(g.bar, 6, 1, t->border);
@@ -1020,7 +1020,7 @@ static void show_error(Str what) {
 // Open the file at path, positioning the view at restore (if not 0) or at
 // the heading named frag (if not empty) or at the top. path may point into
 // V.path.
-static void load_document(Str path, Anchor const *restore, Str frag) {
+static void load_document(Str path, const Anchor *restore, Str frag) {
     b32 same = V.state==VS_DOC && equals(path, (Str){V.path, V.pathlen});
     doc_clear();
     hover_clear();
@@ -1675,7 +1675,7 @@ static void draw_message(Str text, f32 size, b32 bold, Color color, f32 width, f
 }
 
 static void draw_empty(void) {
-    Theme const *t = current_theme();
+    const Theme *t = current_theme();
     f32 w = clampf(V.size.w - 64, 100, 600);
     f32 y = V.size.h/2 - 20;
     if (V.state == VS_ERROR) {
@@ -1692,7 +1692,7 @@ static void draw_status(void) {
     if (!V.hover.len) {
         return;
     }
-    Theme const *t = current_theme();
+    const Theme *t = current_theme();
     if (!V.status) {
         Run r = {0};
         r.text  = V.hover;

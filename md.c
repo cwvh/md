@@ -707,7 +707,7 @@ static iz md_entity(Str s, iz i, i32 *c1, i32 *c2) {
     iz hi  = (md_ent_off[len+1] - md_ent_off[len]) / rec;
     while (lo < hi) {
         iz  mid = (lo + hi) / 2;
-        u8 const *r = md_ent_data + md_ent_off[len] + mid*rec;
+        const u8 *r = md_ent_data + md_ent_off[len] + mid*rec;
         iz  cmp = 0;
         for (iz k = 0; k<len && !cmp; k++) {
             cmp = s.data[beg+k] - r[k];
@@ -928,7 +928,7 @@ static iz md_norm_label(MdParser *p, Str raw) {
     return n;
 }
 
-static u32 md_hash(u8 const *s, iz n) {
+static u32 md_hash(const u8 *s, iz n) {
     u32 h = 2166136261u;
     for (iz i = 0; i < n; i++) {
         h = (h ^ s[i]) * 16777619u;
@@ -937,7 +937,7 @@ static u32 md_hash(u8 const *s, iz n) {
 }
 
 // Slot for a normalized label: its entry, or the free slot for it.
-static MdRef *md_ref_slot(MdRef *refs, iz cap, u8 const *key, iz n, u32 h) {
+static MdRef *md_ref_slot(MdRef *refs, iz cap, const u8 *key, iz n, u32 h) {
     for (iz i = h & (u32)(cap - 1);; i = (i + 1) & (cap - 1)) {
         MdRef *r = &refs[i];
         if (!r->key.data) {
@@ -1187,7 +1187,7 @@ static iz md_scan_html(Str s, iz i, MdMemo *m) {
 
 // Blocks
 
-static b32 md_ieq(Str s, char const *t) {
+static b32 md_ieq(Str s, const char *t) {
     iz i = 0;
     for (; t[i]; i++) {
         if (i>=s.len || lower(s.data[i])!=(u8)t[i]) {
@@ -1197,7 +1197,7 @@ static b32 md_ieq(Str s, char const *t) {
     return i == s.len;
 }
 
-static char const *const md_block_tags[] = {
+static const char *const md_block_tags[] = {
     "address", "article", "aside", "base", "basefont", "blockquote", "body",
     "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
     "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
