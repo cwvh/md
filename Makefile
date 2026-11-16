@@ -17,16 +17,22 @@ IMGLIBS  = -lkernel32 -lole32 -lgcc
 # Portable core, then the Windows layer.
 CORE     = base.c platform.h md.c mdtables.c highlight.c layout.c view.c
 SRC      = $(CORE) win32.c image.c gfx.c
+WINDRES  = windres
+# The icon, compiled to an object linked into every build of the app.
+RES      = md-res.o
 
-md.exe: main.c $(SRC)
-	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(LDLIBS)
+md.exe: main.c $(SRC) $(RES)
+	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(RES) $(LDLIBS)
 
 # A release build that also takes --bench, for timing. Not shipped.
-md-bench.exe: main.c $(SRC)
-	$(CC) $(CFLAGS) $(RELEASE) -DBENCH $(GUI) -o $@ main.c $(LDLIBS)
+md-bench.exe: main.c $(SRC) $(RES)
+	$(CC) $(CFLAGS) $(RELEASE) -DBENCH $(GUI) -o $@ main.c $(RES) $(LDLIBS)
 
-md-debug.exe: main.c $(SRC)
-	$(CC) $(CFLAGS) $(DEBUG) $(GUI) -o $@ main.c $(LDLIBS)
+md-debug.exe: main.c $(SRC) $(RES)
+	$(CC) $(CFLAGS) $(DEBUG) $(GUI) -o $@ main.c $(RES) $(LDLIBS)
+
+$(RES): res/md.rc res/md.ico
+	$(WINDRES) -O coff -o $@ res/md.rc
 
 md-test.exe: test.c $(SRC)
 	$(CC) $(CFLAGS) $(DEBUG) -o $@ test.c $(TESTLIBS)
@@ -69,6 +75,6 @@ comcheck: comcheck.c win32.c base.c comcheck-consts.inc
 	./comcheck-consts.exe
 
 clean:
-	rm -f md.exe md-debug.exe md-bench.exe $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
+	rm -f md.exe md-debug.exe md-bench.exe $(RES) $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
 
 .PHONY: test comcheck clean

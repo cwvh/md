@@ -970,6 +970,9 @@ static i32 run(Arena all) {
     wc.proc      = wndproc;
     wc.instance  = inst;
     wc.cursor    = g.cursors[CURSOR_ARROW];
+    // With no separate small icon, Windows picks the right size out of
+    // the same resource for the title bar and taskbar.
+    wc.icon      = LoadIconW(inst, MAKEINTRESOURCEW(1));
     wc.classname = L"md";
     if (!RegisterClassExW(&wc)) {
         win_fatal(L"Could not register the window class.");

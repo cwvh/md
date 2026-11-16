@@ -3,3 +3,4 @@
 comcheck-consts.inc
 .claude/
 md-bench.txt
+*.o

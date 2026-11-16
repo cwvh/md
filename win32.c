@@ -824,6 +824,7 @@ W32(b32)    AdjustWindowRectEx(WinRect *, u32, b32, u32);
 W32(uptr)   SetTimer(uptr, uptr, u32, void *);
 W32(b32)    KillTimer(uptr, uptr);
 W32(uptr)   LoadCursorW(uptr, const c16 *);
+W32(uptr)   LoadIconW(uptr, const c16 *);
 W32(uptr)   SetCursor(uptr);
 W32(uptr)   SetCapture(uptr);
 W32(b32)    ReleaseCapture(void);
