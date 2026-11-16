@@ -46,6 +46,11 @@ static struct {
     i32      darkforce;         // debug builds: 1 dark, 2 light, 0 system
     i32      zoomsteps;         // debug builds: keys to press after start up, for
     i32      pagedowns;         //   screenshots without typing into someone's window
+    Str      findtext;          // debug builds: open find and type this
+    b32      selectall;         // debug builds: select everything
+    b32      copy;              // debug builds: and copy it
+    b32      dragging;          // debug builds: drag a selection from p0 to p1
+    Point    drag0, drag1;
     Arena    tmp;               // platform scratch, for string conversion
     Arena    scratch;           // passed to app_paint
     c16      highsurrogate;     // pending first half of a typed pair
@@ -310,8 +315,13 @@ static b32 os_open_dialog(Arena *a, Str *path) {
     return 1;
 }
 
+// Windows wants CR LF: every LF without a CR before it becomes one.
 static void os_clipboard_set(Str utf8) {
-    iz   units = utf8.len + 1;      // at most one unit per byte
+    iz lines = 0;
+    for (iz i = 0; i < utf8.len; i++) {
+        lines += utf8.data[i]=='\n' && (i==0 || utf8.data[i-1]!='\r');
+    }
+    iz   units = utf8.len + lines + 1;      // at most one unit per byte, and a CR per line
     uptr mem   = GlobalAlloc(GMEM_MOVEABLE, (uz)units*sizeof(c16));
     if (!mem) {
         return;
@@ -320,13 +330,61 @@ static void os_clipboard_set(Str utf8) {
     if (!w) {
         return;
     }
-    w[toutf16(w, utf8)] = 0;
+    iz n = 0;
+    for (iz i = 0; i < utf8.len;) {
+        iz e = i;
+        while (e < utf8.len && utf8.data[e] != '\n') {
+            e++;
+        }
+        n += toutf16(w + n, (Str){utf8.data + i, e - i});
+        if (e < utf8.len) {
+            if (n==0 || w[n-1]!='\r') {
+                w[n++] = '\r';
+            }
+            w[n++] = '\n';
+        }
+        i = e + 1;
+    }
+    w[n] = 0;
     GlobalUnlock(mem);
     if (OpenClipboard(g.hwnd)) {
         EmptyClipboard();
         SetClipboardData(CF_UNICODETEXT, mem);     // the system owns mem now
         CloseClipboard();
     }
+}
+
+static b32 os_clipboard_get(Arena *a, Str *out) {
+    if (!OpenClipboard(g.hwnd)) {
+        return 0;
+    }
+    b32 ok  = 0;
+    uptr h  = GetClipboardData(CF_UNICODETEXT);
+    c16 const *w = h ? GlobalLock(h) : 0;
+    if (w) {
+        iz n = 0;
+        while (n < (iz)1<<28 && w[n]) {
+            n++;
+        }
+        if (n*3 + 3*4096 < a->end - a->beg) {       // at most 3 bytes a unit
+            Str s = fromutf16(a, w, n);
+            iz  o = 0;
+            for (iz i = 0; i < s.len; i++) {        // back to LF
+                if (!(s.data[i]=='\r' && i+1<s.len && s.data[i+1]=='\n')) {
+                    s.data[o++] = s.data[i];
+                }
+            }
+            *out = (Str){s.data, o};
+            ok   = 1;
+        }
+        GlobalUnlock(h);
+    }
+    CloseClipboard();
+    return ok;
+}
+
+static u64 os_time_ms(void) {
+    return GetTickCount64();
 }
 
 
@@ -772,6 +830,32 @@ static i32 run(Arena all) {
         } else if (equals(args.argv[i], S("--pgdn")) && i+1 < args.argc) {
             parseint(args.argv[++i], &g.pagedowns);     // then page down this many times
             continue;
+        } else if (equals(args.argv[i], S("--find")) && i+1 < args.argc) {
+            g.findtext = args.argv[++i];                // then search for this
+            continue;
+        } else if (equals(args.argv[i], S("--select-all"))) {
+            g.selectall = 1;
+            continue;
+        } else if (equals(args.argv[i], S("--copy"))) {
+            g.copy = 1;                                 // after selecting
+            continue;
+        } else if (equals(args.argv[i], S("--drag")) && i+1 < args.argc) {
+            // X0,Y0,X1,Y1 in DIPs: drag a selection from one point to the other
+            f32 v[4] = {0};
+            Str a    = args.argv[++i];
+            for (i32 k = 0, at = 0; k < 4; k++) {
+                i32 e = at, n = 0;
+                while (e < a.len && a.data[e] != ',') {
+                    e++;
+                }
+                parseint((Str){a.data + at, e - at}, &n);
+                v[k] = (f32)n;
+                at   = e + 1;
+            }
+            g.drag0    = (Point){v[0], v[1]};
+            g.drag1    = (Point){v[2], v[3]};
+            g.dragging = 1;
+            continue;
         }
 #endif
 #ifdef BENCHMARK
@@ -857,6 +941,28 @@ static i32 run(Arena all) {
     }
     for (i32 i = 0; i < g.pagedowns; i++) {
         app_key(KEY_PGDN, 0);
+    }
+    if (g.dragging) {
+        Point a = g.drag0, b = g.drag1;
+        app_mouse_move(a, 0);
+        app_mouse_down(a, BUTTON_LEFT, 0);
+        app_mouse_move((Point){(a.x + b.x)/2, (a.y + b.y)/2}, 0);
+        app_mouse_move(b, 0);
+        app_mouse_up(b, BUTTON_LEFT, 0);
+    }
+    if (g.selectall) {
+        app_key(KEY_A, MOD_PRIMARY);
+    }
+    if (g.copy) {
+        app_key(KEY_C, MOD_PRIMARY);
+    }
+    if (g.findtext.len) {
+        app_key(KEY_F, MOD_PRIMARY);
+        for (Str t = g.findtext; t.len;) {
+            Utf8 d = utf8decode(t);
+            app_char(d.rune);
+            t = d.tail;
+        }
     }
 #endif
     // Show the window cloaked, paint the first frame, then uncloak, so it

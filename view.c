@@ -19,7 +19,12 @@ enum {
     HIST      = 32,
     ANIM_TIMER = 1,
     ANIM_MS   = 16,
+    SEL_TIMER = 2,          // scrolls while a selection is dragged out of the window
+    SEL_MS    = 16,
     BAR_ZONE  = 20,         // width of the strip at the right that grabs the scrollbar
+    FIND_MAX  = 240,        // bytes in the find field
+    DRAG_PX   = 3,          // how far the mouse moves before a press is a drag
+    TRIPLE_MS = 500,        // a third click this soon after a double click
 };
 
 typedef struct {
@@ -27,6 +32,41 @@ typedef struct {
     iz     len;
     Anchor at;              // where the reader was when leaving
 } HistEntry;
+
+// The selection runs from anchor to focus, which may come in either order;
+// on is false while they are the same place. The press that started it is
+// remembered to tell a click from a drag.
+typedef struct {
+    DocPos    anchor, focus;
+    b32       have;         // anchor is a place the user clicked
+    b32       on;
+    b32       down;         // the left button is down, after a press in the text
+    b32       moved;        // and has dragged, or the press was a double or triple click
+    Point     press;
+    i32       gran;         // a drag selects by 0 characters, 1 words, 2 lines
+    DocPos    unit0, unit1; // the word or line that was selected first
+    b32       dbl;          // a double click happened at t_dbl and p_dbl
+    u64       t_dbl;
+    Point     p_dbl;
+    b32       timer;        // the auto-scroll timer runs
+} Sel;
+
+// The find bar: a text field and its results. The query is searched in the
+// text of the whole document, see doc_find_scan.
+typedef struct {
+    b32       open;
+    u8        text[FIND_MAX];
+    iz        len, caret;
+    b32       all;          // all of the text is selected
+    u8        fold[FIND_MAX];
+    b32       have;         // cur is a match
+    DocPos    cur;
+    i32       n, total;     // which match cur is, from 1, and how many
+    b32       stale;        // the document was loaded again: search anew
+    i32       keep_n;       // ... and go to this match
+    Paragraph *pt, *pc;     // the field's text and the count, made when drawn
+    f32       sx;           // how far the text in the field is scrolled
+} Find;
 
 static struct {
     Arena     mem0;         // all the memory documents may use
@@ -58,6 +98,9 @@ static struct {
     b32       drag;         // dragging the scrollbar thumb
     f32       drag_off;
     b32       timer;        // the animation timer runs
+
+    Sel       sel;
+    Find      find;
 
     HistEntry hist[HIST];
     i32       nhist, cur;
@@ -327,6 +370,627 @@ static void scroll_by(f32 dy) {
 }
 
 
+// Selection and find
+
+// Working memory for an event, which the layout code takes as an RB.
+typedef struct {
+    Arena a;
+    RB    rb;
+} Work;
+
+static void work_init(Work *w) {
+    w->a = V.tmp;
+    rb_init(&w->rb, &w->a);
+}
+
+static void sel_bounds(DocPos *lo, DocPos *hi) {
+    if (pos_cmp(V.sel.anchor, V.sel.focus) <= 0) {
+        *lo = V.sel.anchor;
+        *hi = V.sel.focus;
+    } else {
+        *lo = V.sel.focus;
+        *hi = V.sel.anchor;
+    }
+}
+
+static void sel_sync(void) {
+    D.sel_on = V.sel.on;
+    if (V.sel.on) {
+        sel_bounds(&D.sel_lo, &D.sel_hi);
+    }
+    os_invalidate();
+}
+
+static void sel_set(DocPos anchor, DocPos focus) {
+    V.sel.anchor = anchor;
+    V.sel.focus  = focus;
+    V.sel.have   = 1;
+    V.sel.on     = pos_cmp(anchor, focus) != 0;
+    sel_sync();
+}
+
+static void sel_clear(void) {
+    if (V.sel.on) {
+        V.sel.on = 0;
+        sel_sync();
+    }
+}
+
+static void select_all(void) {
+    if (V.state != VS_DOC || !D.nleaves) {
+        return;
+    }
+    Work w;
+    work_init(&w);
+    sel_set(pos_first(0), pos_last(D.nleaves - 1, &w.rb));
+}
+
+// The word (gran 1) or line (gran 2) around pos, as two positions.
+static void sel_unit(DocPos pos, b32 right, i32 gran, DocPos *u0, DocPos *u1, Work *w) {
+    Seg s = seg_get(pos.leaf, pos.cell, &w->rb);
+    iz  b = pos.off, e = pos.off;
+    if (gran == 1) {
+        seg_word(s, pos.off, right, &b, &e);
+    } else {
+        seg_line(D.leaves + pos.leaf, s, pos.off, &b, &e);
+    }
+    *u0 = *u1 = pos;
+    u0->off = b;
+    u1->off = e;
+}
+
+// Put the selected text on the clipboard.
+static void copy_selection(void) {
+    if (V.state != VS_DOC || !V.sel.on) {
+        return;
+    }
+    DocPos lo, hi;
+    sel_bounds(&lo, &hi);
+    Work w;
+    work_init(&w);
+    iz n = doc_copy(lo, hi, 0, &w.rb);     // this makes the text, so no more memory is needed
+    if (n <= 0) {
+        return;
+    }
+    Arena t = *D.mem;                       // free space, forgotten after use
+    if (n + 3*4096 > t.end - t.beg) {
+        return;
+    }
+    u8 *buf = new(&t, n, u8);
+    doc_copy(lo, hi, buf, &w.rb);
+    os_clipboard_set((Str){buf, n});
+}
+
+// Keep scrolling while the mouse is held outside the window.
+static void sel_timer_update(void) {
+    b32 out = V.sel.down && V.sel.moved && V.state == VS_DOC &&
+              (V.mouse.y < 0 || V.mouse.y > V.size.h);
+    if (out && !V.sel.timer) {
+        os_timer_start(SEL_TIMER, SEL_MS);
+        V.sel.timer = 1;
+    } else if (!out && V.sel.timer) {
+        os_timer_stop(SEL_TIMER);
+        V.sel.timer = 0;
+    }
+}
+
+static DocPos pos_under(Point p, Work *w, b32 *right) {
+    p.x = clampf(p.x, 0, V.size.w - 1);
+    p.y = clampf(p.y, 0, V.size.h - 1);
+    return doc_pos_at(p, V.scroll, &w->rb, right);
+}
+
+// The mouse moved to p during a drag: the selection runs to there.
+static void sel_drag_to(Point p) {
+    layout_now();
+    Work w;
+    work_init(&w);
+    b32    right;
+    DocPos pos = pos_under(p, &w, &right);
+    DocPos a = V.sel.anchor, f = pos;
+    if (V.sel.gran) {
+        DocPos u0, u1;
+        sel_unit(pos, right, V.sel.gran, &u0, &u1, &w);
+        if (pos_cmp(pos, V.sel.unit0) < 0) {
+            a = V.sel.unit1;
+            f = u0;
+        } else {
+            a = V.sel.unit0;
+            f = u1;
+        }
+    }
+    sel_set(a, f);
+}
+
+
+// Find
+
+static Str find_query(void) {
+    return (Str){V.find.fold, V.find.len};
+}
+
+// Tell the painter what to highlight.
+static void find_sync(void) {
+    Find *f = &V.find;
+    D.find_q   = f->open && f->len ? find_query() : (Str){0};
+    D.find_ok  = f->open && f->have;
+    D.find_cur = f->cur;
+    if (f->pc) {            // the count changed
+        os_para_free(f->pc);
+        f->pc = 0;
+    }
+    os_invalidate();
+}
+
+static void find_drop_paras(void) {
+    Find *f = &V.find;
+    if (f->pt) {
+        os_para_free(f->pt);
+        f->pt = 0;
+    }
+    if (f->pc) {
+        os_para_free(f->pc);
+        f->pc = 0;
+    }
+}
+
+// Bring the current match into view: nothing if it is on screen already,
+// else centered. The reading position is otherwise left alone.
+static void find_reveal(void) {
+    Find *f = &V.find;
+    if (V.state != VS_DOC || !f->open || !f->have) {
+        return;
+    }
+    layout_now();
+    Leaf *l = D.leaves + f->cur.leaf;
+    f32 top, h;
+    Work w;
+    work_init(&w);
+    if (!doc_range_y(f->cur, f->len, &w.rb, &top, &h)) {
+        // Not laid out yet: go to its leaf, then look again.
+        pin_to((Anchor){f->cur.leaf, -V.size.h/3, l->line});
+        layout_now();
+        if (!doc_range_y(f->cur, f->len, &w.rb, &top, &h)) {
+            return;
+        }
+    }
+    f32 y = l->y + top;
+    if (y >= V.scroll + 56 && y + h <= V.scroll + V.size.h - 24) {
+        return;
+    }
+    f32 off = l->y - anchor_base(f->cur.leaf) + top + h/2 - V.size.h/2;
+    pin_to((Anchor){f->cur.leaf, off, l->line});
+}
+
+// Search again, from the current match or else from the reading position, or
+// for the match numbered want_n if that is not 0.
+static void find_run(i32 want_n, b32 reveal) {
+    Find *f = &V.find;
+    f->stale = 0;
+    if (V.state != VS_DOC || !f->open || !f->len || !D.nleaves) {
+        f->have  = 0;
+        f->total = f->n = 0;
+        find_sync();
+        return;
+    }
+    layout_now();
+    DocPos from = f->cur;
+    if (!f->have) {
+        i32 i = leaf_at(V.scroll);
+        while (i + 1 < D.nleaves && D.leaves[i].y + D.leaves[i].h <= V.scroll) {
+            i++;
+        }
+        from = pos_first(i);
+    }
+    Work w;
+    work_init(&w);
+    FindScan r = doc_find_scan(find_query(), from, want_n, &w.rb);
+    f->total = r.total;
+    f->n     = r.n;
+    f->have  = r.n > 0;
+    f->cur   = r.pos;
+    find_sync();
+    if (reveal) {
+        find_reveal();
+    }
+}
+
+static void find_step(i32 dir) {
+    Find *f = &V.find;
+    if (V.state != VS_DOC || !f->open || !f->len) {
+        return;
+    }
+    if (f->stale) {
+        find_run(f->keep_n, 0);
+    }
+    if (!f->have) {
+        return;
+    }
+    Work w;
+    work_init(&w);
+    f->cur = doc_find_step(find_query(), f->cur, dir, &w.rb);
+    f->n   = dir > 0 ? f->n%f->total + 1 : f->n > 1 ? f->n - 1 : f->total;
+    find_sync();
+    find_reveal();
+}
+
+// The text of the field changed.
+static void find_edited(void) {
+    Find *f = &V.find;
+    fold_text(f->fold, (Str){f->text, f->len});
+    find_drop_paras();
+    find_run(0, 1);
+}
+
+static void find_close(void) {
+    Find *f = &V.find;
+    f->open = 0;
+    f->have = 0;
+    find_drop_paras();
+    find_sync();
+}
+
+// Open the find bar, or select its text if it is open. A selection of one
+// line becomes the query.
+static void find_open(void) {
+    Find *f = &V.find;
+    if (V.state != VS_DOC) {
+        return;
+    }
+    if (f->open) {
+        f->all = f->len > 0;
+        os_invalidate();
+        return;
+    }
+    b32 filled = 0;
+    if (V.sel.on) {
+        DocPos lo, hi;
+        sel_bounds(&lo, &hi);
+        Work w;
+        work_init(&w);
+        if (lo.leaf == hi.leaf && lo.cell == hi.cell && hi.off - lo.off <= FIND_MAX) {
+            Seg s = seg_get(lo.leaf, lo.cell, &w.rb);
+            iz  b = clampz(lo.off, 0, s.len), e = clampz(hi.off, 0, s.len);
+            b32 line = e > b;
+            for (iz i = b; i < e; i++) {
+                line = line && s.p[i] != '\n';
+            }
+            if (line) {
+                memcpy(f->text, s.p + b, (uz)(e - b));
+                f->len = e - b;
+                filled = 1;
+                f->cur = lo;
+            }
+        }
+    }
+    f->open  = 1;
+    f->all   = f->len > 0;
+    f->caret = f->len;
+    f->have  = filled;
+    fold_text(f->fold, (Str){f->text, f->len});
+    find_drop_paras();
+    find_run(0, 1);
+}
+
+// Replace bytes [b, e) of the field's text.
+static void field_replace(iz b, iz e, Str ins) {
+    Find *f = &V.find;
+    if (f->len - (e - b) + ins.len > FIND_MAX) {
+        return;
+    }
+    memmove(f->text + b + ins.len, f->text + e, (uz)(f->len - e));
+    if (ins.len) {
+        memcpy(f->text + b, ins.data, (uz)ins.len);
+    }
+    f->len   += ins.len - (e - b);
+    f->caret  = b + ins.len;
+    f->all    = 0;
+    find_edited();
+}
+
+static iz field_prev(iz i) {
+    Find *f = &V.find;
+    while (i > 0) {
+        i--;
+        if ((f->text[i] & 0xc0) != 0x80) {
+            break;
+        }
+    }
+    return i;
+}
+
+static iz field_next(iz i) {
+    Find *f = &V.find;
+    while (i < f->len) {
+        i++;
+        if (i >= f->len || (f->text[i] & 0xc0) != 0x80) {
+            break;
+        }
+    }
+    return i;
+}
+
+// The start of the word before i, for Ctrl+Backspace and Ctrl+Left.
+static iz field_word_back(iz i) {
+    Find *f = &V.find;
+    while (i > 0 && f->text[i-1] == ' ') {
+        i--;
+    }
+    while (i > 0 && f->text[i-1] != ' ') {
+        i--;
+    }
+    return i;
+}
+
+static iz field_word_fwd(iz i) {
+    Find *f = &V.find;
+    while (i < f->len && f->text[i] != ' ') {
+        i++;
+    }
+    while (i < f->len && f->text[i] == ' ') {
+        i++;
+    }
+    return i;
+}
+
+static void field_paste(void) {
+    Find *f = &V.find;
+    Arena t = V.tmp;
+    Str   s = {0};
+    if (!os_clipboard_get(&t, &s)) {
+        return;
+    }
+    iz n = 0;
+    while (n < s.len && s.data[n] != '\n' && s.data[n] != '\r') {
+        n++;
+    }
+    n = min(n, (iz)FIND_MAX);
+    while (n > 0 && n < s.len && (s.data[n] & 0xc0) == 0x80) {
+        n--;
+    }
+    iz b = f->all ? 0 : f->caret, e = f->all ? f->len : f->caret;
+    field_replace(b, e, (Str){s.data, n});
+}
+
+// Keys for the find bar while it is open. Returns false for the keys that
+// are not its business, which then go on to the document.
+static b32 find_key(Key key, u32 mods) {
+    Find *f    = &V.find;
+    b32   ctrl = !!(mods & MOD_PRIMARY);
+    b32   shift = !!(mods & MOD_SHIFT);
+    if (mods & MOD_ALT) {
+        return 0;
+    }
+    switch (key) {
+    case KEY_ESCAPE:
+        find_close();
+        return 1;
+    case KEY_ENTER:
+    case KEY_F3:
+        find_step(shift ? -1 : 1);
+        return 1;
+    case KEY_G:
+        if (ctrl) {
+            find_step(shift ? -1 : 1);
+            return 1;
+        }
+        return 0;
+    case KEY_F:
+    case KEY_A:
+        if (ctrl) {
+            f->all = f->len > 0;
+            os_invalidate();
+            return 1;
+        }
+        return 0;
+    case KEY_C:
+    case KEY_X:
+        if (ctrl && f->all) {
+            os_clipboard_set((Str){f->text, f->len});
+            if (key == KEY_X) {
+                field_replace(0, f->len, (Str){0});
+            }
+            return 1;
+        }
+        return 0;
+    case KEY_INSERT:
+        if (shift) {
+            field_paste();
+            return 1;
+        }
+        if (ctrl && f->all) {
+            os_clipboard_set((Str){f->text, f->len});
+            return 1;
+        }
+        return 0;
+    case KEY_V:
+        if (ctrl) {
+            field_paste();
+            return 1;
+        }
+        return 0;
+    case KEY_SPACE:
+        return !ctrl;           // text: it comes as a character
+    case KEY_BACKSPACE:
+        if (f->all) {
+            field_replace(0, f->len, (Str){0});
+        } else if (f->caret > 0) {
+            field_replace(ctrl ? field_word_back(f->caret) : field_prev(f->caret), f->caret, (Str){0});
+        }
+        return 1;
+    case KEY_DELETE:
+        if (f->all) {
+            field_replace(0, f->len, (Str){0});
+        } else if (f->caret < f->len) {
+            field_replace(f->caret, ctrl ? field_word_fwd(f->caret) : field_next(f->caret), (Str){0});
+        }
+        return 1;
+    case KEY_LEFT:
+        f->caret = f->all ? 0 : ctrl ? field_word_back(f->caret) : field_prev(f->caret);
+        f->all   = 0;
+        os_invalidate();
+        return 1;
+    case KEY_RIGHT:
+        f->caret = f->all ? f->len : ctrl ? field_word_fwd(f->caret) : field_next(f->caret);
+        f->all   = 0;
+        os_invalidate();
+        return 1;
+    case KEY_HOME:
+        f->caret = 0;
+        f->all   = 0;
+        os_invalidate();
+        return 1;
+    case KEY_END:
+        f->caret = f->len;
+        f->all   = 0;
+        os_invalidate();
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+typedef struct {
+    Rect bar, field, count, prev, next, close;
+} FindGeo;
+
+static FindGeo find_geo(void) {
+    FindGeo g;
+    f32 w   = clampf(V.size.w - 2*BAR_ZONE - 8, 150, 380);
+    g.bar   = (Rect){max(V.size.w - w - BAR_ZONE - 4, (f32)4), 8, w, 38};
+    f32 bx  = g.bar.x + g.bar.w - 6 - 26;
+    g.close = (Rect){bx, g.bar.y + 6, 26, 26};
+    g.next  = (Rect){bx - 26, g.bar.y + 6, 26, 26};
+    g.prev  = (Rect){bx - 52, g.bar.y + 6, 26, 26};
+    f32 cw  = w < 260 ? 0 : 66;
+    g.count = (Rect){g.prev.x - cw - 4, g.bar.y, cw, g.bar.h};
+    f32 fx  = g.bar.x + 8;
+    g.field = (Rect){fx, g.bar.y + 6, max(g.count.x - 6 - fx, (f32)40), 26};
+    return g;
+}
+
+static b32 in_rect(Point p, Rect r) {
+    return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
+}
+
+static b32 find_over(Point p) {
+    return V.state == VS_DOC && V.find.open && in_rect(p, find_geo().bar);
+}
+
+// A click in the bar.
+static void find_press(Point p) {
+    Find *f = &V.find;
+    FindGeo g = find_geo();
+    if (in_rect(p, g.close)) {
+        find_close();
+    } else if (in_rect(p, g.next)) {
+        find_step(1);
+    } else if (in_rect(p, g.prev)) {
+        find_step(-1);
+    } else if (in_rect(p, g.field)) {
+        f->all = 0;
+        if (f->pt) {
+            TextHit h = os_para_hit(f->pt, (Point){p.x - (g.field.x + 6 - f->sx), 1});
+            f->caret = clampz(h.offset, 0, f->len);
+        } else {
+            f->caret = f->len;
+        }
+        os_invalidate();
+    }
+}
+
+static Paragraph *ui_para(Str text, f32 size, Color c, Align align, f32 width) {
+    Run r = {0};
+    r.text  = text;
+    r.size  = size;
+    r.color = c;
+    Paragraph *p = os_para_new(&r, 1, width);
+    if (p) {
+        os_para_style(p, 0, align);
+    }
+    return p;
+}
+
+static void draw_button(Rect r, i32 kind, Color c, Color hover) {
+    if (V.inside && in_rect(V.mouse, r)) {
+        os_fill_rrect(r, 4, hover);
+    }
+    f32 cx = r.x + r.w/2, cy = r.y + r.h/2;
+    if (kind == 2) {
+        os_stroke_line((Point){cx - 4, cy - 4}, (Point){cx + 4, cy + 4}, 1.5f, c);
+        os_stroke_line((Point){cx - 4, cy + 4}, (Point){cx + 4, cy - 4}, 1.5f, c);
+    } else {
+        f32 d = kind == 0 ? 1.0f : -1.0f;       // chevron up or down
+        os_stroke_line((Point){cx - 5, cy + 2.5f*d}, (Point){cx, cy - 2.5f*d}, 1.5f, c);
+        os_stroke_line((Point){cx, cy - 2.5f*d}, (Point){cx + 5, cy + 2.5f*d}, 1.5f, c);
+    }
+}
+
+static void draw_find(void) {
+    Find *f = &V.find;
+    if (!f->open) {
+        return;
+    }
+    Theme const *t = current_theme();
+    FindGeo g = find_geo();
+    os_fill_rrect(g.bar, 6, t->status_bg);
+    os_stroke_rrect(g.bar, 6, 1, t->border);
+    b32 bad = f->len && !f->total;
+    os_fill_rrect(g.field, 4, t->bg);
+    os_stroke_rrect(g.field, 4, 1, bad ? t->error : t->border);
+    if (!f->pt && f->len) {
+        f->pt = ui_para((Str){f->text, f->len}, 14, t->text, ALIGN_LEFT, 0);
+    }
+    Rect inner = {g.field.x + 1, g.field.y + 1, g.field.w - 2, g.field.h - 2};
+    f32  cx    = 0;
+    if (f->pt && f->caret > 0) {
+        Rect r[8];
+        iz   n = os_para_rects(f->pt, 0, f->caret, r, 8);
+        if (n > 0) {
+            cx = r[min(n, (iz)8) - 1].x + r[min(n, (iz)8) - 1].w;
+        }
+    }
+    f->sx = max(cx - (inner.w - 14), (f32)0);
+    os_clip_push(inner);
+    f32 tx = g.field.x + 6 - f->sx;
+    if (f->pt) {
+        Size s = os_para_size(f->pt);
+        f32  ty = g.field.y + (g.field.h - s.h)/2;
+        if (f->all) {
+            os_fill_rect((Rect){tx - 1, ty, s.w + 2, s.h}, t->sel);
+        }
+        os_para_draw(f->pt, (Point){tx, ty});
+    }
+    if (!f->all) {
+        os_fill_rect((Rect){tx + cx, g.field.y + 5, 1, g.field.h - 10}, t->text);
+    }
+    os_clip_pop();
+    if (g.count.w > 0 && f->len) {
+        if (!f->pc) {
+            u8  buf[64];
+            iz  n = 0;
+            if (f->total) {
+                n += fmt_int(buf + n, f->n);
+                memcpy(buf + n, " of ", 4);
+                n += 4;
+                n += fmt_int(buf + n, f->total);
+            } else {
+                memcpy(buf, "No results", 10);
+                n = 10;
+            }
+            f->pc = ui_para((Str){buf, n}, 12.5f, bad ? t->error : t->muted, ALIGN_RIGHT, g.count.w);
+        }
+        if (f->pc) {
+            Size s = os_para_size(f->pc);
+            os_para_draw(f->pc, (Point){g.count.x, g.count.y + (g.count.h - s.h)/2});
+        }
+    }
+    draw_button(g.prev, 0, t->text, t->inline_bg);
+    draw_button(g.next, 1, t->text, t->inline_bg);
+    draw_button(g.close, 2, t->text, t->inline_bg);
+}
+
+
 // Loading documents
 
 static void hover_clear(void) {
@@ -356,9 +1020,18 @@ static void show_error(Str what) {
 // the heading named frag (if not empty) or at the top. path may point into
 // V.path.
 static void load_document(Str path, Anchor const *restore, Str frag) {
+    b32 same = V.state==VS_DOC && equals(path, (Str){V.path, V.pathlen});
     doc_clear();
     hover_clear();
     anim_stop();
+    if (V.sel.timer) {
+        os_timer_stop(SEL_TIMER);
+    }
+    V.sel = (Sel){0};
+    V.find.have   = 0;
+    V.find.stale  = V.find.open;      // searched again when it is next needed
+    V.find.keep_n = same ? V.find.n : 0;
+    find_drop_paras();
     V.down_link = 0;
     V.drag      = 0;
     iz n = min(path.len, (iz)PATHCAP);
@@ -545,7 +1218,14 @@ static Bar bar_geometry(void) {
 static void hover_refresh(RB *rb) {
     Str    url = {0};
     Cursor cur = CURSOR_ARROW;
-    if (V.state==VS_DOC && V.inside && !V.drag && V.mouse.x < V.size.w - BAR_ZONE) {
+    if (V.sel.down && V.sel.moved) {
+        cur = CURSOR_IBEAM;     // selecting: wherever the mouse is
+    } else if (V.state==VS_DOC && V.inside && find_over(V.mouse)) {
+        FindGeo g = find_geo();
+        cur = in_rect(V.mouse, g.field) ? CURSOR_IBEAM :
+              in_rect(V.mouse, g.prev) || in_rect(V.mouse, g.next) || in_rect(V.mouse, g.close) ?
+              CURSOR_HAND : CURSOR_ARROW;
+    } else if (V.state==VS_DOC && V.inside && !V.drag && V.mouse.x < V.size.w - BAR_ZONE) {
         Hit h = doc_hit(V.mouse, V.scroll);
         if (h.leaf>=0 && h.p && h.th.inside) {
             cur = CURSOR_IBEAM;
@@ -591,6 +1271,14 @@ static void app_mouse_move(Point p, u32 mods) {
         drag_to(p.y);
         return;
     }
+    if (V.sel.down && V.state == VS_DOC) {
+        if (V.sel.moved || p.x - V.sel.press.x >= DRAG_PX || V.sel.press.x - p.x >= DRAG_PX ||
+            p.y - V.sel.press.y >= DRAG_PX || V.sel.press.y - p.y >= DRAG_PX) {
+            V.sel.moved = 1;
+            sel_drag_to(p);
+            sel_timer_update();
+        }
+    }
     hover_now();
     // The bar widens when approached.
     b32 hot = p.x >= V.size.w - BAR_ZONE;
@@ -608,7 +1296,6 @@ static void app_mouse_leave(void) {
 }
 
 static void app_mouse_down(Point p, Button b, u32 mods) {
-    (void)mods;
     V.mouse  = p;
     V.inside = 1;
     V.down_link = 0;
@@ -628,12 +1315,44 @@ static void app_mouse_down(Point p, Button b, u32 mods) {
             return;
         }
     }
+    if (find_over(p)) {
+        find_press(p);
+        return;
+    }
     Hit h = doc_hit(p, V.scroll);
     if (h.leaf>=0 && h.p && h.th.inside && h.th.link) {
         V.down_leaf = h.leaf;
         V.down_cell = h.cell;
         V.down_link = h.th.link;
     }
+    // Start a selection, or extend the last one, or select a line.
+    Work w;
+    work_init(&w);
+    u64    now = os_time_ms();
+    b32    right;
+    DocPos pos = pos_under(p, &w, &right);
+    Sel   *s   = &V.sel;
+    f32    dx  = p.x - s->p_dbl.x, dy = p.y - s->p_dbl.y;
+    if (s->dbl && now - s->t_dbl <= TRIPLE_MS && dx*dx + dy*dy <= 36) {
+        DocPos u0, u1;
+        sel_unit(pos, right, 2, &u0, &u1, &w);
+        s->gran  = 2;
+        s->unit0 = u0;
+        s->unit1 = u1;
+        sel_set(u0, u1);
+        s->moved = 1;
+    } else if ((mods & MOD_SHIFT) && s->have) {
+        s->gran = 0;
+        sel_set(s->anchor, pos);
+        s->moved = 1;
+    } else {
+        s->gran = 0;
+        sel_set(pos, pos);
+        s->moved = 0;
+    }
+    s->dbl   = 0;
+    s->down  = 1;
+    s->press = p;
 }
 
 static void app_mouse_up(Point p, Button b, u32 mods) {
@@ -643,6 +1362,13 @@ static void app_mouse_up(Point p, Button b, u32 mods) {
         V.drag = 0;
         os_invalidate();
         return;
+    }
+    if (b == BUTTON_LEFT && V.sel.down) {
+        V.sel.down = 0;
+        sel_timer_update();
+        if (V.sel.moved) {
+            V.down_link = 0;        // that was a drag, not a click
+        }
     }
     if (b != BUTTON_LEFT || !V.down_link || V.state != VS_DOC) {
         return;
@@ -661,7 +1387,35 @@ static void app_mouse_up(Point p, Button b, u32 mods) {
 }
 
 static void app_double_click(Point p, u32 mods) {
-    (void)p; (void)mods;
+    (void)mods;
+    V.mouse  = p;
+    V.inside = 1;
+    if (V.state != VS_DOC || p.x >= V.size.w - BAR_ZONE) {
+        return;
+    }
+    layout_now();
+    if (find_over(p)) {
+        V.find.all = V.find.len > 0;
+        os_invalidate();
+        return;
+    }
+    Work w;
+    work_init(&w);
+    b32    right;
+    DocPos pos = pos_under(p, &w, &right);
+    DocPos u0, u1;
+    sel_unit(pos, right, 1, &u0, &u1, &w);
+    Sel *s = &V.sel;
+    s->gran  = 1;
+    s->unit0 = u0;
+    s->unit1 = u1;
+    sel_set(u0, u1);
+    s->down  = 1;
+    s->moved = 1;
+    s->press = p;
+    s->dbl   = 1;
+    s->t_dbl = os_time_ms();
+    s->p_dbl = p;
 }
 
 
@@ -726,6 +1480,9 @@ static void reload(void) {
 }
 
 static void app_key(Key key, u32 mods) {
+    if (V.state == VS_DOC && V.find.open && find_key(key, mods)) {
+        return;
+    }
     f32 line = 2*line_body*V.zoom;
     f32 page = V.size.h*0.9f;
     if (mods & MOD_PRIMARY) {
@@ -735,6 +1492,11 @@ static void app_key(Key key, u32 mods) {
         case KEY_0:     set_zoom(1); break;
         case KEY_O:     open_dialog(); break;
         case KEY_R:     reload(); break;
+        case KEY_A:     select_all(); break;
+        case KEY_C:
+        case KEY_INSERT: copy_selection(); break;
+        case KEY_F:     find_open(); break;
+        case KEY_G:     find_step(mods & MOD_SHIFT ? -1 : 1); break;
         default: break;
         }
         return;
@@ -756,6 +1518,13 @@ static void app_key(Key key, u32 mods) {
         return;
     }
     switch (key) {
+    case KEY_F3:
+        find_open();
+        if (V.find.open && V.find.len && !V.find.have) {
+            find_run(0, 1);
+        }
+        break;
+    case KEY_ESCAPE: sel_clear(); break;
     case KEY_UP:    scroll_by(-line); break;
     case KEY_DOWN:  scroll_by(line); break;
     case KEY_PGUP:  scroll_by(-page); break;
@@ -773,7 +1542,13 @@ static void app_key(Key key, u32 mods) {
 }
 
 static void app_char(i32 rune) {
-    (void)rune;
+    Find *f = &V.find;
+    if (V.state != VS_DOC || !f->open || rune < 32 || rune == 0x7f) {
+        return;
+    }
+    u8 enc[4];
+    iz n = utf8encode(enc, rune);
+    field_replace(f->all ? 0 : f->caret, f->all ? f->len : f->caret, (Str){enc, n});
 }
 
 
@@ -802,6 +1577,7 @@ static void app_theme_changed(void) {
         return;
     }
     V.dark = dark;
+    find_drop_paras();
     if (V.state == VS_DOC) {
         Anchor a = current_anchor();
         doc_configure(V.size.w, V.zoom, current_theme());
@@ -821,6 +1597,17 @@ static void app_file_dropped(Str path) {
 }
 
 static void app_timer(i32 id) {
+    if (id == SEL_TIMER) {
+        sel_timer_update();
+        if (V.sel.timer) {
+            // Further out, faster.
+            f32 d = V.mouse.y < 0 ? -V.mouse.y : V.mouse.y - V.size.h;
+            f32 v = 4 + min(d, (f32)300)*0.25f;
+            scroll_by(V.mouse.y < 0 ? -v : v);
+            sel_drag_to(V.mouse);
+        }
+        return;
+    }
     if (id != ANIM_TIMER) {
         return;
     }
@@ -851,6 +1638,11 @@ static void app_timer(i32 id) {
 
 static void app_close(void) {
     anim_stop();
+    if (V.sel.timer) {
+        os_timer_stop(SEL_TIMER);
+        V.sel.timer = 0;
+    }
+    find_drop_paras();
     hover_clear();
     doc_clear();
     os_watch_file((Str){0});
@@ -938,8 +1730,12 @@ static void app_paint(Arena scratch, Size size) {
     V.pinned  = 0;
     V.pin_end = 0;
     V.dirty   = 0;
+    if (V.find.stale) {
+        find_run(V.find.keep_n, 0);
+    }
     doc_paint(V.scroll, size, &rb);
     hover_refresh(&rb);
+    draw_find();
     draw_status();
     draw_bar();
     doc_evict(V.scroll, size.h);

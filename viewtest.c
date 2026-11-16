@@ -63,6 +63,7 @@ typedef struct {
     char const *phase;
     Output     *out;
     b32         dead;
+    u64         checks;     // how many CHECKs passed
     volatile u64 progress;
 } Ctx;
 static Ctx ctx;
@@ -123,8 +124,8 @@ static _Noreturn void fail(char const *check, char const *what, i64 a, i64 b) {
     context();
 }
 
-#define CHECK(c, what) do { if (!(c)) fail(#c, what, 0, 0); } while (0)
-#define CHECK2(c, what, a, b) do { if (!(c)) fail(#c, what, (i64)(a), (i64)(b)); } while (0)
+#define CHECK(c, what) do { ctx.checks++; if (!(c)) fail(#c, what, 0, 0); } while (0)
+#define CHECK2(c, what, a, b) do { ctx.checks++; if (!(c)) fail(#c, what, (i64)(a), (i64)(b)); } while (0)
 
 typedef struct {
     u32 code;
@@ -258,6 +259,7 @@ static void put_img(char const *path, i32 w, i32 h, i32 frames, i32 delay) {
 static void rig_reset(void) {
     rig.data = rig.data0;
     rig.gen  = rig.gen0;
+    fk_free(fk.clip);
     memset(&fk, 0, sizeof(fk));
     fk.window = (Size){900, 700};
 }
@@ -377,8 +379,10 @@ static void check_state(void) {
 
 // Finding things on screen
 
-// Where text is in window coordinates, after scrolling it into view.
-static b32 goto_text(Str needle, Point *pos) {
+// Where text is in window coordinates, after scrolling it into view: the
+// left edge of its first character, and the right edge of the last one on
+// that line.
+static b32 goto_span(Str needle, Point *pos, Point *end) {
     layout_all();
     for (i32 i = 0; i < D.nleaves; i++) {
         Leaf *l = D.leaves + i;
@@ -405,11 +409,18 @@ static b32 goto_text(Str needle, Point *pos) {
                 Rect rc[1];
                 CHECK(os_para_rects(p, o, o + needle.len, rc, 1) >= 1, "no rect for text");
                 *pos = (Point){org.x + rc[0].x + 1, org.y + rc[0].y + rc[0].h/2};
+                if (end) {
+                    *end = (Point){org.x + rc[0].x + rc[0].w - 1, pos->y};
+                }
                 return 1;
             }
         }
     }
     return 0;
+}
+
+static b32 goto_text(Str needle, Point *pos) {
+    return goto_span(needle, pos, 0);
 }
 
 static void click_text(char const *needle) {
@@ -1103,6 +1114,972 @@ static void test_leaks(void) {
     CHECK(fk.made_paras > 100, "test made paragraphs");
 }
 
+// Selection, copy and find
+
+static Str clip(void) {
+    return (Str){fk.clip, fk.cliplen};
+}
+
+static void print_esc(Output *o, Str s) {
+    printc(o, '"');
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s.data[i];
+        if (c == '\n') {
+            print(o, S("\\n"));
+        } else if (c == '\t') {
+            print(o, S("\\t"));
+        } else if (c < 32) {
+            print(o, S("\\x"));
+            printhex(o, c);
+        } else {
+            printc(o, c);
+        }
+    }
+    printc(o, '"');
+}
+
+static b32 valid_utf8(Str s) {
+    while (s.len) {
+        Utf8 d = utf8decode(s);
+        if (d.rune == 0xfffd && s.len - d.tail.len == 1) {
+            return 0;
+        }
+        s = d.tail;
+    }
+    return 1;
+}
+
+static void expect_str(Str got, char const *want, char const *what) {
+    if (!equals(got, cstr(want))) {
+        Output *o = ctx.out;
+        print(o, S("--- "));
+        print(o, cstr(what));
+        print(o, S(" ---\ngot:  "));
+        print_esc(o, got);
+        print(o, S("\nwant: "));
+        print_esc(o, cstr(want));
+        print(o, S("\n"));
+        fail("text differs", what, got.len, (i64)cstr(want).len);
+    }
+}
+
+// Ctrl+C, and what it put on the clipboard.
+static void expect_copy(char const *want, char const *what) {
+    fk.clipset = 0;
+    key(KEY_C, MOD_PRIMARY);
+    CHECK2(fk.clipset, what, 0, 0);
+    expect_str(clip(), want, what);
+}
+
+static void drag(Point a, Point b) {
+    app_mouse_move(a, 0);
+    app_mouse_down(a, BUTTON_LEFT, 0);
+    app_mouse_move((Point){(a.x + b.x)/2 + 4, (a.y + b.y)/2}, 0);
+    app_mouse_move(b, 0);
+    app_mouse_up(b, BUTTON_LEFT, 0);
+    paint();
+}
+
+// Select from the first character of one text to the last of another, the
+// way a person would: by dragging. The whole document must fit the window.
+static void select_text(char const *from, char const *to) {
+    Point a, ae, b, be;
+    if (!goto_span(cstr(to), &b, &be) || !goto_span(cstr(from), &a, &ae)) {
+        print(ctx.out, S("select_text: "));
+        print(ctx.out, cstr(from));
+        print(ctx.out, S(" to "));
+        print(ctx.out, cstr(to));
+        print(ctx.out, S("\n"));
+        CHECK(0, "text to select not found");
+    }
+    CHECK(V.scroll == 0, "test document does not fit the window");
+    drag(a, be);
+}
+
+static void click_at(Point p, u32 mods) {
+    app_mouse_move(p, mods);
+    app_mouse_down(p, BUTTON_LEFT, mods);
+    app_mouse_up(p, BUTTON_LEFT, mods);
+}
+
+// Double click the way Windows delivers it: down, up, double click, up.
+static void dbl_click(Point p) {
+    fk.now += 1000;
+    click_at(p, 0);
+    app_double_click(p, 0);
+    app_mouse_up(p, BUTTON_LEFT, 0);
+}
+
+static char const doc_copy_md[] =
+    "# Title and *more*\n"
+    "\n"
+    "Para one with **bold** and `code` and a [link](https://x.org). Second\n"
+    "soft break.  \n"
+    "Hard break line.\n"
+    "\n"
+    "- one\n"
+    "- two\n"
+    "  - nested\n"
+    "    1. deep ordered\n"
+    "- [ ] open\n"
+    "- [x] done\n"
+    "\n"
+    "1. first\n"
+    "2. second\n"
+    "\n"
+    "> quote line\n"
+    ">\n"
+    "> second para\n"
+    "\n"
+    "```c\n"
+    "int a;\n"
+    "\ttab\n"
+    "```\n"
+    "\n"
+    "| A | B |\n"
+    "|---|---|\n"
+    "| 1 | 2 |\n"
+    "| 3 | `x` |\n"
+    "\n"
+    "![alt text](img/a.fimg) end\n"
+    "\n"
+    "---\n"
+    "\n"
+    "Last para.\n";
+
+static void test_copy(void) {
+    ctx.phase = "copy";
+    rig_reset();
+    setup_files();
+    put_s("/docs/copy.md", doc_copy_md);
+    start("/docs/copy.md", 900, 1800);
+    paint();
+    CHECK(V.state == VS_DOC && max_scroll() == 0, "the document fits the window");
+    CHECK(!V.sel.on, "nothing is selected at first");
+    key(KEY_C, MOD_PRIMARY);
+    CHECK(!fk.clipset, "copying nothing leaves the clipboard alone");
+
+    // Everything, with every kind of block.
+    key(KEY_A, MOD_PRIMARY);
+    CHECK(V.sel.on, "ctrl+a selects");
+    paint();
+    expect_copy("Title and more\n"
+                "\n"
+                "Para one with bold and code and a link. Second soft break.\n"
+                "Hard break line.\n"
+                "\n"
+                "- one\n"
+                "- two\n"
+                "  - nested\n"
+                "    1. deep ordered\n"
+                "[ ] open\n"
+                "[x] done\n"
+                "\n"
+                "1. first\n"
+                "2. second\n"
+                "\n"
+                "> quote line\n"
+                ">\n"
+                "> second para\n"
+                "\n"
+                "int a;\n"
+                "    tab\n"
+                "\n"
+                "A\tB\n"
+                "1\t2\n"
+                "3\tx\n"
+                "\n"
+                "alt text end\n"
+                "\n"
+                "Last para.",
+                "copy of everything");
+    // The image is in the selection, so it is tinted too.
+    CHECK(fk.nimage_draws == 1, "image drawn");
+    b32 tinted = 0;
+    Color sel = theme_light.sel;
+    for (i32 i = 0; i < fk.nfill_log; i++) {
+        FFill *f = fk.fill_log + i;
+        Rect d = fk.image_draws[0].dst;
+        if (f->c.r == sel.r && f->c.a == sel.a && near(f->r.x, d.x, 0.01f) && near(f->r.y, d.y, 0.01f) &&
+            near(f->r.w, d.w, 0.01f) && near(f->r.h, d.h, 0.01f)) {
+            tinted = 1;
+        }
+    }
+    CHECK(tinted, "an image in the selection is tinted");
+    // Ctrl+Insert copies as well; Escape clears.
+    fk.clipset = 0;
+    key(KEY_INSERT, MOD_PRIMARY);
+    CHECK(fk.clipset, "ctrl+insert copies");
+    key(KEY_ESCAPE, 0);
+    CHECK(!V.sel.on, "escape clears the selection");
+    fk.clipset = 0;
+    key(KEY_C, MOD_PRIMARY);
+    CHECK(!fk.clipset, "nothing to copy after escape");
+
+    // Within one paragraph: just the text, no markers.
+    select_text("bold", "code");
+    expect_copy("bold and code", "partial paragraph");
+    select_text("two", "two");
+    expect_copy("two", "one list item selected without its marker");
+    // Dragging up gives the same.
+    {
+        Point a, ae, b, be;
+        CHECK(goto_span(S("bold"), &a, &ae) && goto_span(S("code"), &b, &be), "text");
+        drag(be, a);
+        expect_copy("bold and code", "partial paragraph, dragged backward");
+    }
+    // Across leaves: the first one partial has no marker, the rest do.
+    select_text("Second", "deep");
+    expect_copy("Second soft break.\n"
+                "Hard break line.\n"
+                "\n"
+                "- one\n"
+                "- two\n"
+                "  - nested\n"
+                "    1. deep",
+                "partial across paragraph and list");
+    select_text("nested", "done");
+    expect_copy("  - nested\n    1. deep ordered\n[ ] open\n[x] done", "from the start of an item");
+    select_text("ordered", "done");
+    expect_copy("ordered\n[ ] open\n[x] done", "from the middle of an item");
+    select_text("second para", "second para");
+    expect_copy("second para", "inside a quote");
+    select_text("quote line", "second para");
+    expect_copy("> quote line\n>\n> second para", "quote across paragraphs");
+    // Across a code block and a table.
+    select_text("tab", "2");
+    expect_copy("tab\n"
+                "\n"
+                "A\tB\n"
+                "1\t2",
+                "from code into a table");
+    select_text("1", "x");
+    expect_copy("1\t2\n3\tx", "table cells");
+    select_text("A", "A");
+    expect_copy("A", "a header cell");
+    select_text("int a;", "tab");
+    expect_copy("int a;\n    tab", "code lines");
+
+    // Images are their alt text; partial selections of it.
+    select_text("\xEF\xBF\xBC", "end");
+    expect_copy("alt text end", "image and text");
+
+    // Positions are in order and within the text.
+    CHECK(pos_cmp(V.sel.anchor, V.sel.focus) != 0, "selection has an extent");
+
+    // Clicking clears, and so does Shift-less clicking anywhere.
+    Point p;
+    CHECK(goto_text(S("Last"), &p), "text");
+    click_at(p, 0);
+    CHECK(!V.sel.on, "a click clears the selection");
+    app_close();
+    CHECK2(fk.live_paras == 0 && fk.live_images == 0, "leak", fk.live_paras, fk.live_images);
+}
+
+static void test_sel_click(void) {
+    ctx.phase = "sel-click";
+    rig_reset();
+    setup_files();
+    put_s("/docs/words.md",
+          "alpha beta_gamma, delta42 \xC3\xBCn\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9 "
+          "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E end\n"
+          "\n"
+          "- an item with words\n"
+          "\n"
+          "```c\n"
+          "foo bar\n"
+          "baz qux\n"
+          "```\n"
+          "\n"
+          "[a link](https://example.org/l) and text\n"
+          "\n"
+          "| cell one | cell two |\n"
+          "|---|---|\n"
+          "| a b | c d |\n");
+    start("/docs/words.md", 900, 900);
+    paint();
+    Point p, e;
+    // Words.
+    CHECK(goto_span(S("beta_gamma"), &p, &e), "text");
+    dbl_click(p);
+    expect_copy("beta_gamma", "double click selects a word, underscore included");
+    CHECK(goto_span(S("alpha"), &p, &e), "text");
+    dbl_click(p);
+    expect_copy("alpha", "first word");
+    dbl_click(e);
+    expect_copy("alpha", "right half of the last letter");
+    CHECK(goto_span(S("delta42"), &p, &e), "text");
+    dbl_click((Point){p.x + 20, p.y});
+    expect_copy("delta42", "letters and digits");
+    CHECK(goto_span(S("\xC3\xBCn\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9"), &p, &e), "text");
+    dbl_click((Point){p.x + 12, p.y});
+    expect_copy("\xC3\xBCn\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9", "accented letters");
+    CHECK(goto_span(S("\xE6\x97\xA5\xE6\x9C\xAC"), &p, &e), "text");
+    dbl_click(p);
+    expect_copy("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", "a run of CJK");
+    // A single other character: the comma, from either half.
+    CHECK(goto_span(S(","), &p, &e), "text");
+    dbl_click(p);
+    expect_copy(",", "left half of a comma");
+    dbl_click(e);
+    expect_copy(",", "right half of a comma");
+    // In code and table cells.
+    CHECK(goto_span(S("bar"), &p, &e), "text");
+    dbl_click(p);
+    expect_copy("bar", "word in code");
+    CHECK(goto_span(S("two"), &p, &e), "text");
+    dbl_click(p);
+    expect_copy("two", "word in a table cell");
+    // Dragging after a double click extends by words.
+    CHECK(goto_span(S("beta_gamma"), &p, &e), "text");
+    Point far;
+    CHECK(goto_span(S("delta42"), &far, &e), "text");
+    click_at(p, 0);
+    app_double_click(p, 0);
+    app_mouse_move((Point){far.x + 20, far.y}, 0);
+    app_mouse_up((Point){far.x + 20, far.y}, BUTTON_LEFT, 0);
+    expect_copy("beta_gamma, delta42", "double click and drag selects whole words");
+
+    // Triple click: the paragraph, or the line of code.
+    fk.now = 10000;
+    CHECK(goto_span(S("beta_gamma"), &p, &e), "text");
+    dbl_click(p);
+    fk.now += 120;
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    expect_copy("alpha beta_gamma, delta42 \xC3\xBCn\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9 "
+                "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E end", "triple click selects the paragraph");
+    app_mouse_up(p, BUTTON_LEFT, 0);
+    CHECK(goto_span(S("with"), &p, &e), "text");
+    dbl_click(p);
+    fk.now += 120;
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    app_mouse_up(p, BUTTON_LEFT, 0);
+    expect_copy("an item with words", "triple click on a list item: no marker");
+    CHECK(goto_span(S("baz"), &p, &e), "text");
+    dbl_click(p);
+    fk.now += 120;
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    app_mouse_up(p, BUTTON_LEFT, 0);
+    expect_copy("baz qux", "triple click in code: a line");
+    CHECK(goto_span(S("c d"), &p, &e), "text");
+    dbl_click(p);
+    fk.now += 120;
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    app_mouse_up(p, BUTTON_LEFT, 0);
+    expect_copy("c d", "triple click in a table cell: the cell");
+    // Too slow, or far away: just a click.
+    CHECK(goto_span(S("beta_gamma"), &p, &e), "text");
+    dbl_click(p);
+    fk.now += 900;
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    app_mouse_up(p, BUTTON_LEFT, 0);
+    CHECK(!V.sel.on, "a slow third click is a plain click");
+    dbl_click(p);
+    fk.now += 100;
+    app_mouse_down((Point){p.x + 100, p.y}, BUTTON_LEFT, 0);
+    app_mouse_up((Point){p.x + 100, p.y}, BUTTON_LEFT, 0);
+    CHECK(!V.sel.on, "a third click elsewhere is a plain click");
+
+    // Shift+click extends from the last click or the anchor.
+    CHECK(goto_span(S("beta_gamma"), &p, &e), "text");
+    Point q, qe;
+    CHECK(goto_span(S("alpha"), &q, &qe), "text");
+    click_at(p, 0);
+    CHECK(!V.sel.on, "click: no selection");
+    click_at((Point){e.x, e.y}, MOD_SHIFT);
+    expect_copy("beta_gamma", "shift+click selects from the last click");
+    CHECK(goto_span(S("delta42"), &far, &e), "text");
+    click_at((Point){e.x, e.y}, MOD_SHIFT);
+    expect_copy("beta_gamma, delta42", "shift+click again extends");
+    click_at(q, MOD_SHIFT);
+    expect_copy("alpha ", "shift+click on the other side of the anchor");
+
+    // Links: a click follows, a drag from a link selects.
+    CHECK(goto_span(S("a link"), &p, &e), "text");
+    click_at(p, 0);
+    CHECK2(fk.nurls == 1, "link followed by a plain click", fk.nurls, 0);
+    CHECK(goto_span(S("a link"), &p, &e), "text");
+    CHECK(goto_span(S("text"), &far, &e), "text");
+    drag(p, e);
+    CHECK2(fk.nurls == 1, "a drag from a link does not follow it", fk.nurls, 0);
+    expect_copy("a link and text", "selected from a link");
+    // Shift+click on a link doesn't follow it either.
+    CHECK(goto_span(S("a link"), &p, &e), "text");
+    click_at(p, 0);
+    CHECK2(fk.nurls == 2, "click again", fk.nurls, 0);
+    click_at(p, MOD_SHIFT);
+    CHECK2(fk.nurls == 2, "shift+click on a link doesn't follow", fk.nurls, 0);
+
+    // Cursor: I-beam over text while selecting.
+    CHECK(goto_span(S("alpha"), &p, &e), "text");
+    app_mouse_move(p, 0);
+    CHECK(fk.cursor == CURSOR_IBEAM, "I-beam over text");
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    app_mouse_move((Point){p.x + 100, p.y + 300}, 0);
+    CHECK(fk.cursor == CURSOR_IBEAM, "I-beam while dragging a selection");
+    app_mouse_up((Point){p.x + 100, p.y + 300}, BUTTON_LEFT, 0);
+    app_close();
+    CHECK2(fk.live_paras == 0, "leak", fk.live_paras, 0);
+}
+
+static void test_sel_scroll(void) {
+    ctx.phase = "sel-scroll";
+    rig_reset();
+    Buf b = bnew(1<<20);
+    for (i32 i = 0; i < 150; i++) {
+        bs(&b, "Paragraph ");
+        bnum(&b, i);
+        bs(&b, " alpha beta gamma.\n\n");
+    }
+    put("/d/s.md", bstr(&b));
+    start("/d/s.md", 600, 300);
+    paint();
+    scroll_to(D.leaves[70].y);
+    paint();
+    layout_now();
+    Point p = {100, 40};
+    app_mouse_move(p, 0);
+    app_mouse_down(p, BUTTON_LEFT, 0);
+    i32 start_leaf = V.sel.anchor.leaf;
+    CHECK(start_leaf >= 70 && start_leaf <= 72, "press in a paragraph near the top");
+    CHECK(!fk.timer_on[SEL_TIMER], "no auto-scroll before the drag");
+    // Out of the window at the bottom: a timer scrolls and extends.
+    app_mouse_move((Point){100, 280}, 0);
+    CHECK(!fk.timer_on[SEL_TIMER], "inside the window: no timer");
+    app_mouse_move((Point){100, 320}, 0);
+    CHECK(fk.timer_on[SEL_TIMER], "dragging below the window starts the timer");
+    app_mouse_move((Point){100, 321}, 0);
+    f32 s0 = V.scroll;
+    app_timer(SEL_TIMER);
+    paint();
+    f32 d1 = V.scroll - s0;
+    CHECK2(d1 > 0 && V.sel.focus.leaf >= start_leaf, "scrolls down while the mouse is below", (i64)d1, 0);
+    i32 f1 = V.sel.focus.leaf;
+    app_mouse_move((Point){100, 420}, 0);
+    for (i32 i = 0; i < 20; i++) {
+        app_timer(SEL_TIMER);
+        paint();
+    }
+    CHECK2(V.sel.focus.leaf > f1 + 10, "the selection keeps extending", V.sel.focus.leaf, f1);
+    CHECK(V.sel.focus.leaf <= D.nleaves - 1, "within the document");
+    // Further out: faster.
+    app_mouse_move((Point){100, 300 + 250}, 0);
+    s0 = V.scroll;
+    app_timer(SEL_TIMER);
+    paint();
+    f32 d2 = V.scroll - s0;
+    CHECK2(d2 > d1*2, "speed grows with the distance", (i64)d2, (i64)d1);
+    // Back inside: the timer stops.
+    app_mouse_move((Point){100, 150}, 0);
+    CHECK(!fk.timer_on[SEL_TIMER], "back in the window: the timer stops");
+    // Above the window: scrolls up, and the selection shrinks and flips.
+    app_mouse_move((Point){100, -30}, 0);
+    CHECK(fk.timer_on[SEL_TIMER], "dragging above starts it again");
+    f32 top = V.scroll;
+    for (i32 i = 0; i < 400 && V.scroll > 0; i++) {
+        app_timer(SEL_TIMER);
+        paint();
+        CHECK(V.sel.focus.leaf <= D.nleaves, "valid while scrolling up");
+    }
+    CHECK(V.scroll < top, "scrolled up");
+    CHECK(V.scroll == 0, "all the way up");
+    CHECK2(V.sel.focus.leaf <= 1, "the selection reaches the top", V.sel.focus.leaf, 0);
+    CHECK(pos_cmp(V.sel.focus, V.sel.anchor) < 0, "now it runs backward");
+    app_mouse_up((Point){100, -30}, BUTTON_LEFT, 0);
+    CHECK(!fk.timer_on[SEL_TIMER], "released: no timer");
+    fk.clipset = 0;
+    key(KEY_C, MOD_PRIMARY);
+    CHECK(fk.clipset && clip().len > 1000, "copied a lot");
+    CHECK(valid_utf8(clip()), "valid text");
+    CHECK(equals((Str){fk.clip, 11}, S("Paragraph 0")), "starts at the top");
+    // The timer does nothing without a drag.
+    app_timer(SEL_TIMER);
+    CHECK(!fk.timer_on[SEL_TIMER], "stray tick");
+    app_close();
+    CHECK2(fk.live_paras == 0, "leak", fk.live_paras, 0);
+}
+
+static char const doc_find_md[] =
+    "# Find Fixture\n"
+    "\n"
+    "The quick brown fox. Fox again, and FOX.\n"
+    "\n"
+    "- list fox\n"
+    "- no match here\n"
+    "\n"
+    "| Animal | Note |\n"
+    "|---|---|\n"
+    "| fox | cell fox |\n"
+    "\n"
+    "```text\n"
+    "code with fox inside\n"
+    "second fox\n"
+    "```\n"
+    "\n"
+    "> quoted FOX\n"
+    "\n"
+    "\xC3\x9Cn\xC3\xAF" "c\xC3\xB6" "d\xC3\xA9 \xC3\x89" "COLE \xC3\xA9" "cole\n"
+    "\n"
+    "Last paragraph without it.\n";
+
+static void type_text(char const *s) {
+    Str t = cstr(s);
+    while (t.len) {
+        Utf8 d = utf8decode(t);
+        app_char(d.rune);
+        t = d.tail;
+    }
+    paint();
+}
+
+static Str field_text(void) {
+    return (Str){V.find.text, V.find.len};
+}
+
+static Str find_cur_folded(void) {
+    Arena s = rig.scratch;
+    RB rb;
+    rb_init(&rb, &s);
+    Seg sg = seg_get(V.find.cur.leaf, V.find.cur.cell, &rb);
+    return (Str){sg.p + sg.len + V.find.cur.off, V.find.len};
+}
+
+// The current match is a match, and in the window.
+static void check_find_here(char const *what) {
+    Find *f = &V.find;
+    CHECK2(f->have && f->n >= 1 && f->n <= f->total, what, f->n, f->total);
+    CHECK(equals(find_cur_folded(), (Str){f->fold, f->len}), "the current match is the query");
+    paint();
+    Arena s = rig.scratch;
+    RB rb;
+    rb_init(&rb, &s);
+    f32 top, h;
+    CHECK(doc_range_y(f->cur, f->len, &rb, &top, &h), "the match has a place");
+    f32 y = D.leaves[f->cur.leaf].y + top - V.scroll;
+    CHECK2(y >= 0 && y + h <= V.size.h, "the current match is in view", (i64)y, (i64)V.size.h);
+}
+
+static i32 count_fills(Color c) {
+    i32 n = 0;
+    for (i32 i = 0; i < fk.nfill_log; i++) {
+        Color f = fk.fill_log[i].c;
+        n += f.r==c.r && f.g==c.g && f.b==c.b && f.a==c.a;
+    }
+    return n;
+}
+
+static void test_find(void) {
+    ctx.phase = "find";
+    rig_reset();
+    setup_files();
+    put_s("/docs/find.md", doc_find_md);
+    start("/docs/find.md", 700, 200);
+    paint();
+    CHECK(max_scroll() > 300, "the fixture is longer than the window");
+    CHECK(!V.find.open, "closed at first");
+    key(KEY_F, MOD_PRIMARY);
+    CHECK(V.find.open, "ctrl+f opens");
+    paint();
+    CHECK(fk.live_paras >= D.nlive, "paragraph count");
+    type_text("fox");
+    Find *f = &V.find;
+    CHECK(equals(field_text(), S("fox")), "typing fills the field");
+    CHECK2(f->total == 9 && f->n == 1, "9 matches, the first", f->total, f->n);
+    check_find_here("first match");
+    CHECK(D.find_q.len == 3 && D.find_ok, "the painter knows");
+    // Next, in order, through every kind of block.
+    DocPos prev = f->cur;
+    for (i32 i = 2; i <= 9; i++) {
+        key(KEY_ENTER, 0);
+        CHECK2(f->n == i, "enter goes to the next match", f->n, i);
+        CHECK(pos_cmp(f->cur, prev) > 0, "matches come in reading order");
+        prev = f->cur;
+        check_find_here("next match");
+        Leaf *l = D.leaves + f->cur.leaf;
+        if (i == 4) {
+            CHECK(l->kind == LK_PARA && D.lt[f->cur.leaf].first.len == 2, "a list item");
+        } else if (i == 5 || i == 6) {
+            CHECK2(l->kind == LK_TABLE && f->cur.cell == (i == 5 ? 2 : 3), "in table cells", f->cur.cell, i);
+        } else if (i == 7 || i == 8) {
+            CHECK2(l->kind == LK_CODE, "in code", l->kind, i);
+        } else if (i == 9) {
+            CHECK(D.lt[f->cur.leaf].quotes == 1, "in a quote");
+        }
+    }
+    key(KEY_ENTER, 0);
+    CHECK2(f->n == 1 && f->total == 9, "wraps around to the first", f->n, f->total);
+    check_find_here("wrapped");
+    key(KEY_ENTER, MOD_SHIFT);
+    CHECK2(f->n == 9, "shift+enter wraps backward", f->n, 9);
+    check_find_here("wrapped back");
+    key(KEY_ENTER, MOD_SHIFT);
+    CHECK2(f->n == 8, "and goes back", f->n, 8);
+    key(KEY_F3, 0);
+    CHECK2(f->n == 9, "F3 goes on", f->n, 9);
+    key(KEY_F3, 0);
+    CHECK2(f->n == 1, "F3 wraps", f->n, 1);
+    key(KEY_F3, MOD_SHIFT);
+    CHECK2(f->n == 9, "shift+F3 goes back", f->n, 9);
+    // Highlights: in a window that shows everything, one current and the rest.
+    resize(700, 1400);
+    paint();
+    CHECK2(count_fills(theme_light.find_cur) == 1, "one current match", count_fills(theme_light.find_cur), 0);
+    CHECK2(count_fills(theme_light.find) == 8, "the other matches", count_fills(theme_light.find), 0);
+    key(KEY_ENTER, 0);
+    paint();
+    CHECK2(count_fills(theme_light.find_cur) == 1 && count_fills(theme_light.find) == 8, "the current one moved", 0, 0);
+    fk.dark = 1;
+    app_theme_changed();
+    paint();
+    CHECK2(count_fills(theme_dark.find_cur) == 1 && count_fills(theme_dark.find) == 8, "dark colors", 0, 0);
+    fk.dark = 0;
+    app_theme_changed();
+    resize(700, 200);
+    paint();
+
+    // Case folding beyond ASCII, and no results.
+    key(KEY_F, MOD_PRIMARY);
+    CHECK(f->all, "ctrl+f again selects the field");
+    type_text("\xC3\x89" "COLE");
+    CHECK2(f->total == 2, "\xC3\x89" "COLE matches both cases", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("\xC3\x9C" "N\xC3\x8F" "C\xC3\x96" "D\xC3\x89");
+    CHECK2(f->total == 1, "accented letters fold", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("zzz");
+    CHECK2(f->total == 0 && !f->have && f->n == 0, "no results", f->total, 0);
+    CHECK(!D.find_ok, "nothing is current");
+    CHECK(f->pc != 0, "the count is shown");
+    key(KEY_ENTER, 0);
+    key(KEY_ENTER, MOD_SHIFT);
+    CHECK(f->total == 0, "stepping through nothing");
+    // Spaces, and a match must not cross leaves or cells.
+    key(KEY_A, MOD_PRIMARY);
+    type_text("fox. fox");
+    CHECK2(f->total == 1, "a match with a space", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("find fixture");
+    CHECK2(f->total == 1, "across a heading's words", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("fixture the quick");
+    CHECK2(f->total == 0, "not across leaves", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("fox fox");
+    CHECK2(f->total == 0, "not across table cells", f->total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("o");
+    CHECK2(f->total > 9, "a short query", f->total, 0);
+    // Matches don't overlap.
+    put_s("/docs/aaaa.md", "aaaaa\n\nAAaa\n");
+    app_file_dropped(S("/docs/aaaa.md"));
+    paint();
+    CHECK(f->open, "the bar stays when another document opens");
+    key(KEY_A, MOD_PRIMARY);
+    type_text("aa");
+    CHECK2(f->total == 2 + 2, "overlapping matches are counted once", f->total, 0);
+    key(KEY_ESCAPE, 0);
+    app_file_dropped(S("/docs/find.md"));
+    paint();
+
+    // Editing the field.
+    key(KEY_F, MOD_PRIMARY);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("abc");
+    CHECK(equals(field_text(), S("abc")) && f->caret == 3 && !f->all, "typed abc");
+    key(KEY_LEFT, 0);
+    key(KEY_LEFT, 0);
+    CHECK2(f->caret == 1, "left", f->caret, 1);
+    type_text("X");
+    CHECK(equals(field_text(), S("aXbc")) && f->caret == 2, "insert at the caret");
+    key(KEY_BACKSPACE, 0);
+    CHECK(equals(field_text(), S("abc")) && f->caret == 1, "backspace");
+    key(KEY_END, 0);
+    CHECK(f->caret == 3, "end");
+    key(KEY_RIGHT, 0);
+    CHECK(f->caret == 3, "right at the end");
+    key(KEY_HOME, 0);
+    CHECK(f->caret == 0, "home");
+    key(KEY_BACKSPACE, 0);
+    CHECK(equals(field_text(), S("abc")), "backspace at the start");
+    key(KEY_DELETE, 0);
+    CHECK(equals(field_text(), S("bc")), "delete");
+    key(KEY_END, 0);
+    type_text(" def ghi");
+    key(KEY_BACKSPACE, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("bc def ")), "ctrl+backspace deletes a word");
+    key(KEY_BACKSPACE, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("bc ")), "and again");
+    key(KEY_LEFT, MOD_PRIMARY);
+    CHECK2(f->caret == 0, "ctrl+left", f->caret, 0);
+    key(KEY_RIGHT, MOD_PRIMARY);
+    CHECK2(f->caret == 3, "ctrl+right", f->caret, 3);
+    // Multi-byte characters move and delete as one.
+    key(KEY_A, MOD_PRIMARY);
+    type_text("a\xC3\xA9" "b");
+    key(KEY_LEFT, 0);
+    key(KEY_LEFT, 0);
+    CHECK2(f->caret == 1, "left over a character", f->caret, 1);
+    key(KEY_DELETE, 0);
+    CHECK(equals(field_text(), S("ab")), "delete a whole character");
+    // Space is text in the field, it does not scroll the document.
+    f32 sc = V.scroll;
+    key(KEY_SPACE, 0);
+    CHECK(V.scroll == sc, "space does not scroll while the field has the keys");
+    type_text(" ");
+    CHECK(equals(field_text(), S("a b")), "space typed");
+    // Ctrl+A and typing replace; backspace on a selection clears it.
+    key(KEY_A, MOD_PRIMARY);
+    CHECK(f->all, "ctrl+a selects the field text");
+    key(KEY_BACKSPACE, 0);
+    CHECK(f->len == 0 && !D.find_q.len, "backspace deletes the selected text");
+    // Clipboard: copy and paste in the field.
+    type_text("fox");
+    key(KEY_A, MOD_PRIMARY);
+    fk.clipset = 0;
+    key(KEY_C, MOD_PRIMARY);
+    expect_str(clip(), "fox", "ctrl+c in the field copies its text");
+    key(KEY_BACKSPACE, 0);
+    key(KEY_V, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("fox")) && f->total == 9, "ctrl+v pastes");
+    key(KEY_V, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("foxfox")), "and again, at the caret");
+    key(KEY_A, MOD_PRIMARY);
+    key(KEY_BACKSPACE, 0);
+    // A pasted line break ends the text.
+    fk_free(fk.clip);
+    fk.clip = fk_alloc(10, 1);
+    memcpy(fk.clip, "ab\ncd", 5);
+    fk.cliplen = 5;
+    key(KEY_V, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("ab")), "paste takes the first line");
+    key(KEY_A, MOD_PRIMARY);
+    key(KEY_BACKSPACE, 0);
+
+    // Escape closes and clears the highlights; then it clears the selection.
+    type_text("fox");
+    key(KEY_A, MOD_PRIMARY);        // field text
+    key(KEY_ESCAPE, 0);
+    CHECK(!f->open && !D.find_q.len && !D.find_ok, "escape closes the bar");
+    paint();
+    CHECK2(count_fills(theme_light.find) + count_fills(theme_light.find_cur) == 0, "no highlights after escape", 0, 0);
+    CHECK(fk.live_paras == D.nlive, "the bar's paragraphs are freed");
+    // The text stays for next time.
+    key(KEY_F, MOD_PRIMARY);
+    CHECK(f->open && equals(field_text(), S("fox")) && f->all, "reopened with the old text selected");
+    CHECK2(f->total == 9, "and searching", f->total, 0);
+    key(KEY_ESCAPE, 0);
+    // F3 opens it when it is closed.
+    key(KEY_F3, 0);
+    CHECK(f->open, "F3 opens the bar");
+    key(KEY_ESCAPE, 0);
+
+    // It starts from the reading position.
+    key(KEY_ESCAPE, 0);
+    Leaf *code = 0;
+    for (i32 i = 0; i < D.nleaves; i++) {
+        if (D.leaves[i].kind == LK_CODE) {
+            code = D.leaves + i;
+        }
+    }
+    CHECK(code != 0, "code leaf");
+    scroll_to(code->y);
+    paint();
+    key(KEY_F, MOD_PRIMARY);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("fox");
+    CHECK2(f->n == 7, "starts at the first match on or below the top of the window", f->n, 7);
+    CHECK(D.leaves[f->cur.leaf].kind == LK_CODE, "in the code block");
+    // Typing more keeps the match, as long as it still matches.
+    key(KEY_A, MOD_PRIMARY);
+    type_text("f");
+    key(KEY_END, 0);
+    type_text("o");
+    CHECK2(D.leaves[f->cur.leaf].kind == LK_CODE && f->cur.off == 10, "typing keeps the current match", f->cur.off, 0);
+    key(KEY_BACKSPACE, 0);
+    CHECK2(D.leaves[f->cur.leaf].kind == LK_CODE && f->cur.off == 10, "and so does deleting", f->cur.off, 0);
+    key(KEY_ESCAPE, 0);
+
+    // A selection of one line fills the field.
+    key(KEY_HOME, 0);
+    paint();
+    Point p, e;
+    CHECK(goto_span(S("quick"), &p, &e), "text");
+    dbl_click(p);
+    key(KEY_F, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("quick")) && f->total == 1 && f->n == 1, "selected word becomes the query");
+    check_find_here("pre-filled");
+    key(KEY_ESCAPE, 0);
+    key(KEY_A, MOD_PRIMARY);
+    key(KEY_F, MOD_PRIMARY);
+    CHECK(equals(field_text(), S("quick")), "a many-line selection is not used");
+    key(KEY_ESCAPE, 0);
+    key(KEY_ESCAPE, 0);
+
+    // Keeping the current match: reload, zoom, resize, theme.
+    key(KEY_HOME, 0);
+    paint();
+    key(KEY_F, MOD_PRIMARY);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("fox");
+    for (i32 i = 0; i < 3; i++) {
+        key(KEY_ENTER, 0);
+    }
+    CHECK2(f->n == 4, "at the fourth", f->n, 4);
+    DocPos at = f->cur;
+    key(KEY_PLUS, MOD_PRIMARY);
+    key(KEY_PLUS, MOD_PRIMARY);
+    paint();
+    CHECK(f->n == 4 && f->total == 9 && pos_cmp(f->cur, at) == 0, "zoom keeps it");
+    resize(400, 300);
+    paint();
+    CHECK(f->n == 4 && f->total == 9 && pos_cmp(f->cur, at) == 0, "resize keeps it");
+    fk.dark = 1;
+    app_theme_changed();
+    paint();
+    CHECK(f->n == 4 && f->total == 9 && pos_cmp(f->cur, at) == 0, "theme change keeps it");
+    app_file_changed();
+    CHECK(f->stale, "reload makes the results stale");
+    paint();
+    CHECK(!f->stale && f->n == 4 && f->total == 9 && pos_cmp(f->cur, at) == 0, "reload keeps it");
+    check_find_here("after reload");
+    // The file grows by a match at the end: the number stays.
+    Buf b2 = bnew(1<<16);
+    bs(&b2, doc_find_md);
+    bs(&b2, "\nfox at the end\n");
+    put("/docs/find.md", bstr(&b2));
+    app_file_changed();
+    paint();
+    CHECK2(f->total == 10 && f->n == 4, "reload of a changed file", f->total, f->n);
+    // Buttons with the mouse.
+    FindGeo g = find_geo();
+    click_at((Point){g.next.x + 5, g.next.y + 5}, 0);
+    CHECK2(f->n == 5, "the next button", f->n, 5);
+    click_at((Point){g.prev.x + 5, g.prev.y + 5}, 0);
+    click_at((Point){g.prev.x + 5, g.prev.y + 5}, 0);
+    CHECK2(f->n == 3, "the previous button", f->n, 3);
+    click_at((Point){g.field.x + 3, g.field.y + 5}, 0);
+    CHECK(f->caret == 0 && !f->all, "a click in the field puts the caret there");
+    CHECK(!V.sel.on, "and does not select the document");
+    app_mouse_move((Point){g.field.x + 3, g.field.y + 5}, 0);
+    CHECK(fk.cursor == CURSOR_IBEAM, "I-beam over the field");
+    app_mouse_move((Point){g.next.x + 5, g.next.y + 5}, 0);
+    CHECK(fk.cursor == CURSOR_HAND, "hand over a button");
+    click_at((Point){g.close.x + 5, g.close.y + 5}, 0);
+    CHECK(!f->open, "the close button");
+    app_close();
+    CHECK2(fk.live_paras == 0 && fk.live_images == 0, "leak", fk.live_paras, fk.live_images);
+}
+
+// Text offsets of leaves with images in them: the images are alt text.
+static void test_sel_images(void) {
+    ctx.phase = "sel-images";
+    rig_reset();
+    setup_files();
+    put_s("/docs/imgsel.md",
+          "before ![alt one](img/a.fimg) middle ![x](img/b.fimg) after\n"
+          "\n"
+          "| c1 | c2 |\n"
+          "|---|---|\n"
+          "| ![in cell](img/a.fimg) tail | plain |\n");
+    start("/docs/imgsel.md", 900, 600);
+    paint();
+    layout_all();
+    CHECK(fk.nimage_draws >= 3, "images shown");
+    key(KEY_A, MOD_PRIMARY);
+    expect_copy("before alt one middle x after\n\nc1\tc2\nin cell tail\tplain", "images as alt text");
+    // Select from the image to the end of "middle": the alt text is whole or not there.
+    Point p, e;
+    Point b0, b0e;
+    CHECK(goto_span(S("middle"), &p, &e), "text");
+    CHECK(goto_span(S("before"), &b0, &b0e), "text");
+    drag(b0, e);
+    expect_copy("before alt one middle", "an image inside the selection");
+    // Find sees alt text and highlights through the image.
+    key(KEY_ESCAPE, 0);
+    key(KEY_F, MOD_PRIMARY);
+    type_text("alt one");
+    CHECK2(V.find.total == 1, "alt text is searchable", V.find.total, 0);
+    type_text(" middle");
+    CHECK2(V.find.total == 1, "across an image", V.find.total, 0);
+    key(KEY_A, MOD_PRIMARY);
+    type_text("tail");
+    CHECK2(V.find.total == 1 && D.leaves[V.find.cur.leaf].kind == LK_TABLE, "after an image in a cell", V.find.total, 0);
+    check_find_here("in a cell with an image");
+    // Offsets turn into positions and back.
+    for (i32 i = 0; i < D.nleaves; i++) {
+        Leaf *l = D.leaves + i;
+        if (!(l->flags & LF_IMAGES)) {
+            continue;
+        }
+        Arena s = rig.scratch;
+        RB rb;
+        rb_init(&rb, &s);
+        i32 cell = l->kind == LK_TABLE ? 2 : -1;
+        Seg sg = seg_get(i, cell, &rb);
+        seg_boxes(l, cell, &rb);
+        for (iz o = 0; o <= sg.len; o++) {
+            if (o < sg.len && (sg.p[o] & 0xc0) == 0x80) {
+                continue;
+            }
+            iz pp = para_of_plain(&rb, o);
+            CHECK2(pp >= 0, "paragraph offset", i, o);
+            CHECK2(plain_of_para(&rb, pp) >= o - 20 && plain_of_para(&rb, pp) <= o + 20, "offsets round trip near", i, o);
+        }
+    }
+    app_close();
+    CHECK2(fk.live_paras == 0 && fk.live_images == 0, "leak", fk.live_paras, fk.live_images);
+}
+
+// Text and layout agree on every leaf.
+static void check_texts(void) {
+    if (V.state != VS_DOC) {
+        return;
+    }
+    Arena s = rig.scratch;
+    RB rb;
+    rb_init(&rb, &s);
+    for (i32 i = 0; i < D.nleaves; i++) {
+        Leaf *l = D.leaves + i;
+        if (l->flags & LF_FAILED) {
+            continue;
+        }
+        i32 n = l->kind == LK_TABLE ? l->tb->nrows*l->tb->ncols : 1;
+        for (i32 k = 0; k < n; k++) {
+            Paragraph *p = l->kind == LK_TABLE ? l->tb->cell[k] : l->p;
+            i32 cell = l->kind == LK_TABLE ? k : -1;
+            Seg sg = seg_get(i, cell, &rb);
+            iz len = p ? os_para_length(p) : 0;
+            if (l->flags & LF_IMAGES) {
+                seg_boxes(l, cell, &rb);
+                len = plain_of_para(&rb, len);
+            }
+            CHECK2(sg.len == len, "plain text and paragraph text differ in length", i, k);
+            CHECK2(valid_utf8((Str){sg.p, sg.len}), "plain text is not valid UTF-8", i, k);
+            if (p && !(l->flags & LF_IMAGES)) {
+                CHECK2(equals((Str){sg.p, sg.len}, (Str){p->text, len}), "plain text and paragraph text differ", i, k);
+            }
+        }
+    }
+}
+
+static void test_texts(void) {
+    ctx.phase = "texts";
+    rig_reset();
+    setup_files();
+    start("/docs/all.md", 900, 700);
+    paint();
+    for (i32 zi = 0; zi < (i32)countof(test_zooms); zi++) {
+        set_zoom(test_zooms[zi]);
+        for (i32 wi = 0; wi < (i32)countof(test_widths); wi++) {
+            resize(test_widths[wi], 600);
+            layout_all();
+            check_texts();
+        }
+    }
+    app_close();
+    CHECK(fk.live_paras == 0, "leak");
+}
+
 static void test_all(void) {
     test_layout();
     test_theme();
@@ -1115,6 +2092,12 @@ static void test_all(void) {
     test_reload();
     test_empty();
     test_leaks();
+    test_texts();
+    test_copy();
+    test_sel_click();
+    test_sel_images();
+    test_sel_scroll();
+    test_find();
 }
 
 
@@ -1122,7 +2105,7 @@ static void test_all(void) {
 
 static char const *const words[] = {
     "alpha", "beta", "gamma", "delta", "lorem", "ipsum", "dolor", "sit", "amet", "the", "quick",
-    "brown", "fox", "jumps", "over", "lazy", "dog", "日本語", "中文", "😀", "ünïcödé", "a", "of",
+    "brown", "fox", "jumps", "over", "lazy", "dog", "日本語", "中文", "😀", "ünï" "cödé", "a", "of",
 };
 
 static void gen_words(Buf *b, u64 *r, i32 n) {
@@ -1618,7 +2601,9 @@ static i32 run(Arena all) {
     b32 all_tests = !which.len;
     if (all_tests || equals(which, S("unit"))) {
         test_all();
-        print(o, S("unit: ok\n"));
+        print(o, S("unit: ok, "));
+        printi64(o, (i64)ctx.checks);
+        print(o, S(" checks\n"));
     }
     if (all_tests || equals(which, S("random"))) {
         for (u64 i = 0; i < iters; i++) {

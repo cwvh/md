@@ -79,6 +79,11 @@ typedef struct {
     Str       data;
 } FFile;
 
+typedef struct {
+    Rect  r;
+    Color c;
+} FFill;
+
 static struct {
     Size     window;
     b32      dark;
@@ -95,8 +100,10 @@ static struct {
     b32      quit;
     Str      dialog;        // what the open dialog returns, if set
     b32      dialog_asked;
-    u8       clip[1000];
+    u8      *clip;          // what os_clipboard_set was given last
     iz       cliplen;
+    b32      clipset;       // it was called since the test last looked
+    u64      now;           // os_time_ms: tests move it forward
 
     FFile    files[FK_FILES];
     i32      nfiles;
@@ -113,6 +120,8 @@ static struct {
     i32        npara_draws;
     FDrawImage image_draws[FK_DRAWS];
     i32        nimage_draws;
+    FFill      fill_log[FK_DRAWS];       // the os_fill_rect calls of the paint
+    i32        nfill_log;
     Color      clear;
 } fk;
 
@@ -433,13 +442,16 @@ static void os_clear(Color c) {
     fk.npara_draws   = 0;
     fk.nimage_draws  = 0;
     fk.fills         = 0;
+    fk.nfill_log     = 0;
 }
 
 static void os_fill_rect(Rect r, Color c) {
     assert(fk.painting);
-    (void)c;
     fk_check_rect(r);
     fk.fills++;
+    if (fk.nfill_log < FK_DRAWS) {
+        fk.fill_log[fk.nfill_log++] = (FFill){r, c};
+    }
 }
 
 static void os_fill_rrect(Rect r, f32 radius, Color c) {
@@ -641,6 +653,23 @@ static b32 os_open_dialog(Arena *a, Str *path) {
 }
 
 static void os_clipboard_set(Str utf8) {
-    fk.cliplen = min(utf8.len, (iz)sizeof(fk.clip));
-    memcpy(fk.clip, utf8.data, (uz)fk.cliplen);
+    fk_free(fk.clip);
+    fk.clip    = fk_alloc(utf8.len + 1, 1);
+    fk.cliplen = utf8.len;
+    fk.clipset = 1;
+    memcpy(fk.clip, utf8.data, (uz)utf8.len);
+}
+
+static b32 os_clipboard_get(Arena *a, Str *out) {
+    if (!fk.clip || fk.cliplen + 3*4096 > a->end - a->beg) {
+        return 0;
+    }
+    u8 *d = new(a, fk.cliplen, u8);
+    memcpy(d, fk.clip, (uz)fk.cliplen);
+    *out = (Str){d, fk.cliplen};
+    return 1;
+}
+
+static u64 os_time_ms(void) {
+    return fk.now;
 }

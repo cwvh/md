@@ -29,6 +29,7 @@ typedef struct ImgEntry ImgEntry;
 typedef struct {
     Color bg, text, muted, link, border, rule, code_bg, inline_bg, quote_bar;
     Color alt_row, accent, thumb, status_bg, error;
+    Color sel, find, find_cur;      // selection, find matches, the current one (translucent)
     Color hl[HL_COUNT];     // by HlKind; unset (alpha 0) means plain text
 } Theme;
 
@@ -41,6 +42,7 @@ static Theme const theme_light = {
     .code_bg = HEX(0xf6f8fa), .inline_bg = HEXA(0x818b98, 40),
     .quote_bar = HEX(0xd1d9e0), .alt_row = HEX(0xf6f8fa), .accent = HEX(0x0969da),
     .thumb = HEXA(0x59636e, 150), .status_bg = HEX(0xf6f8fa), .error = HEX(0xcf222e),
+    .sel = HEXA(0x0969da, 70), .find = HEXA(0xffd33d, 140), .find_cur = HEXA(0xff8a1f, 220),
     .hl = {
         [HL_COMMENT]  = HEX(0x59636e), [HL_KEYWORD]  = HEX(0xcf222e),
         [HL_TYPE]     = HEX(0x953800), [HL_STRING]   = HEX(0x0a3069),
@@ -59,6 +61,7 @@ static Theme const theme_dark = {
     .code_bg = HEX(0x151b23), .inline_bg = HEXA(0x6e7681, 90),
     .quote_bar = HEX(0x3d444d), .alt_row = HEX(0x151b23), .accent = HEX(0x1f6feb),
     .thumb = HEXA(0x9198a1, 150), .status_bg = HEX(0x151b23), .error = HEX(0xff7b72),
+    .sel = HEXA(0x388bfd, 95), .find = HEXA(0xea5c00, 85), .find_cur = HEXA(0xea5c00, 175),
     .hl = {
         [HL_COMMENT]  = HEX(0x9198a1), [HL_KEYWORD]  = HEX(0xff7b72),
         [HL_TYPE]     = HEX(0xffa657), [HL_STRING]   = HEX(0xa5d6ff),
@@ -163,6 +166,29 @@ typedef struct {
 } Anchor;
 
 
+// Positions in the text of the document, for selection, copy and find. Text
+// is in plain form, see "Text" below: the same bytes the platform paragraph
+// of the leaf (or table cell) holds, except that an inline image is its alt
+// text instead of the 3 bytes of its box.
+
+typedef struct {
+    i32 leaf;
+    i32 cell;               // table: row*ncols + column, else -1
+    iz  off;                // byte offset in the plain text of that leaf or cell
+} DocPos;
+
+typedef struct {
+    u8 *p;                  // 0 until made; the case folded copy follows the text
+    iz  len;
+} Seg;
+
+typedef struct {
+    Str first, rest;        // what copying puts before the first and the other lines
+    i32 seg0, nseg;         // the leaf's text: one Seg, or one per table cell
+    i32 quotes;             // block quotes around it
+} LText;
+
+
 // Images, decoded once per document
 
 struct ImgEntry {
@@ -191,6 +217,20 @@ static struct {
     u32          epoch;         // changes when heights are no longer exact
     i32          nlive;         // paragraphs alive
     b32          anim;          // an animated image was painted
+
+    // The plain text of the leaves, made when first needed
+    LText       *lt;
+    Seg         *segs;
+    i32          nsegs;
+    u8          *chunk;
+    iz           chunk_left;
+
+    // What the view wants highlighted
+    b32          sel_on;
+    DocPos       sel_lo, sel_hi;
+    Str          find_q;        // case folded, empty for no find
+    b32          find_ok;       // find_cur is a match
+    DocPos       find_cur;
 } D;
 
 
@@ -431,6 +471,7 @@ typedef struct {
     iz        off;          // where its 3 bytes are in the paragraph
     ImgEntry *img;
     f32       w, h;         // the box's size; its bottom edge is on the line's baseline
+    iz        alt;          // bytes of the alt text the box stands for when copied
 } ImgBox;
 
 // Collects the runs of one paragraph, and what the painter needs to know
@@ -457,6 +498,7 @@ typedef struct {
     b32     atstart;        // nothing but breaks so far on this line
     b32     lastspace;
     b32     over;           // out of memory: the rest is dropped
+    b32     plain;          // plain text for copy and find: images are their alt text
 } RB;
 
 static void *rb_grow(RB *rb, void *old, iz used, iz *cap, iz want, iz size) {
@@ -487,6 +529,7 @@ static void rb_reset(RB *rb) {
     rb->atstart  = 1;
     rb->lastspace = 0;
     rb->over     = 0;
+    rb->plain    = 0;
 }
 
 static void rb_init(RB *rb, Arena *a) {
@@ -555,7 +598,7 @@ static void rb_text(RB *rb, Str s, Run const *st) {
     rb->atstart = 0;
 }
 
-static void rb_box(RB *rb, Run const *st, f32 w, f32 h, ImgEntry *img) {
+static void rb_box(RB *rb, Run const *st, f32 w, f32 h, ImgEntry *img, iz alt) {
     if (!rb_slot(rb)) {
         return;
     }
@@ -575,7 +618,7 @@ static void rb_box(RB *rb, Run const *st, f32 w, f32 h, ImgEntry *img) {
     r->box_h  = h;
     rb->off[rb->n] = 0;
     rb->n++;
-    rb->boxes[rb->nboxes++] = (ImgBox){rb->len, img, w, h};
+    rb->boxes[rb->nboxes++] = (ImgBox){rb->len, img, w, h, alt};
     rb->len    += 3;
     rb->atstart = 0;
 }
@@ -726,7 +769,12 @@ static ImgEntry *img_get(Str src) {
 // An image: a box the size of the picture, or its alt text in a border. reqw
 // and reqh are the sizes asked for in the document, already scaled, or 0.
 static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, Run const *st) {
-    ImgEntry *e = src.len && !rb->find ? img_get(src) : 0;   // finding links needs no pictures
+    // Finding links and plain text need no pictures.
+    ImgEntry *e = src.len && !rb->find && !rb->plain ? img_get(src) : 0;
+    Str text = alt.len ? alt : url_name(src);
+    if (!text.len) {
+        text = S("image");
+    }
     if (e && e->im) {
         f32 z = D.zoom;
         f32 w = e->size.w * z;
@@ -745,12 +793,8 @@ static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, Run const *st
             h = h*rb->avail/w;
             w = rb->avail;
         }
-        rb_box(rb, st, max(w, (f32)1), max(h, (f32)1), e);
+        rb_box(rb, st, max(w, (f32)1), max(h, (f32)1), e, text.len);
         return;
-    }
-    Str text = alt.len ? alt : url_name(src);
-    if (!text.len) {
-        text = S("image");
     }
     Run r = *st;
     r.color = D.th->muted;
@@ -1756,6 +1800,792 @@ static void doc_evict(f32 scroll, f32 viewh) {
 }
 
 
+// Text
+//
+// Selecting, copying and finding work on the text of the document, not on
+// its paragraphs: most of those don't exist (the leaves far from the window
+// are only estimated), and the text of all of them must be at hand to search.
+// Each leaf has its plain text, or one text per table cell, made the first
+// time it is needed and kept until the document is closed: the text the
+// paragraph holds (see DocPos), and a case folded copy of the same length
+// for searching. Folding keeps the number of bytes of every character (it
+// only touches ASCII, Latin, Greek and Cyrillic letters), so a position in
+// one is a position in the other.
+
+static iz clampz(iz v, iz lo, iz hi) {
+    return v<lo ? lo : v>hi ? hi : v;
+}
+
+static i32 fold_rune(i32 c) {
+    if (c < 0x80) {
+        return c>='A' && c<='Z' ? c + 32 : c;
+    }
+    if ((c>=0xc0 && c<=0xde && c!=0xd7) || (c>=0x391 && c<=0x3a9 && c!=0x3a2) || (c>=0x410 && c<=0x42f)) {
+        return c + 32;
+    }
+    if ((c>=0x100 && c<=0x137 && !(c&1)) || (c>=0x139 && c<=0x148 && (c&1)) ||
+        (c>=0x14a && c<=0x177 && !(c&1)) || (c>=0x179 && c<=0x17e && (c&1)) ||
+        (c>=0x1e00 && c<=0x1eff && !(c&1))) {
+        return c + 1;
+    }
+    if (c>=0x400 && c<=0x40f) {
+        return c + 80;
+    }
+    switch (c) {
+    case 0x178: return 0xff;
+    case 0x3c2: return 0x3c3;       // final sigma
+    case 0x386: return 0x3ac;
+    case 0x388: case 0x389: case 0x38a: return c + 37;
+    case 0x38c: return 0x3cc;
+    case 0x38e: case 0x38f: return c + 63;
+    default:    return c;
+    }
+}
+
+// Fold s into dst, which has room for s.len bytes.
+static void fold_text(u8 *dst, Str s) {
+    iz o = 0;
+    while (s.len) {
+        u8 c = s.data[0];
+        if (c < 0x80) {
+            dst[o++] = c>='A' && c<='Z' ? (u8)(c + 32) : c;
+            s.data++;
+            s.len--;
+            continue;
+        }
+        Utf8 d = utf8decode(s);
+        iz   n = s.len - d.tail.len;
+        i32  f = fold_rune(d.rune);
+        u8   enc[4];
+        if (f != d.rune && utf8encode(enc, f) == n) {
+            memcpy(dst + o, enc, (uz)n);
+        } else {
+            memcpy(dst + o, s.data, (uz)n);
+        }
+        o += n;
+        s  = d.tail;
+    }
+}
+
+static iz table_ncols(Leaf *l) {
+    return max(l->node->ncols, (i32)1);
+}
+
+// The MdNode of a table cell: cell is row*ncols + column.
+static MdNode *table_cell_node(Leaf *l, i32 cell) {
+    iz nc = table_ncols(l);
+    MdNode *row = l->node->first;
+    for (iz r = cell/nc; row && r > 0; r--) {
+        row = row->next;
+    }
+    MdNode *c = row ? row->first : 0;
+    for (iz i = cell%nc; c && i > 0; i--) {
+        c = c->next;
+    }
+    return c;
+}
+
+// Room for n bytes that live as long as the document, carved from big chunks.
+static u8 *text_alloc(iz n) {
+    if (n > D.chunk_left) {
+        iz cap = max(n, (iz)256<<10);
+        D.chunk      = new(D.mem, cap, u8);
+        D.chunk_left = cap;
+    }
+    u8 *r = D.chunk;
+    D.chunk      += n;
+    D.chunk_left -= n;
+    return r;
+}
+
+static iz item_marker(u8 *out, Decor *d) {
+    if (d->task) {
+        memcpy(out, d->task==MD_TASK_DONE ? "[x] " : "[ ] ", 4);
+        return 4;
+    }
+    if (!d->ordered) {
+        out[0] = '-';
+        out[1] = ' ';
+        return 2;
+    }
+    iz n = fmt_int(out, d->num);
+    out[n++] = d->delim==')' ? ')' : '.';
+    out[n++] = ' ';
+    return n;
+}
+
+// Set up the text of the leaves: where each one's pieces go, and what to put
+// before its lines when copying. The text itself is made by seg_get.
+static void doc_texts_init(void) {
+    if (D.lt || !D.nleaves) {
+        return;
+    }
+    LText *lt = new(D.mem, D.nleaves, LText);
+    i32 nseg = 0;
+    for (i32 i = 0; i < D.nleaves; i++) {
+        Leaf *l = D.leaves + i;
+        iz n = l->kind==LK_TABLE ? max((iz)l->n*table_ncols(l), (iz)1) : 1;
+        lt[i].seg0 = nseg;
+        lt[i].nseg = (i32)n;
+        nseg += (i32)n;
+    }
+    D.segs  = new(D.mem, nseg, Seg);
+    D.nsegs = nseg;
+    // Containers around each leaf: the open ones, as a stack.
+    Decor *open[128];
+    i32 nopen = 0, di = 0;
+    u8 first[2048], rest[2048];
+    for (i32 i = 0; i < D.nleaves; i++) {
+        while (nopen && open[nopen-1]->hi <= i) {
+            nopen--;
+        }
+        for (; di < D.ndecors && D.decors[di].lo <= i; di++) {
+            Decor *d = D.decors + di;
+            if ((d->kind==DK_QUOTE || d->kind==DK_ITEM) && d->hi > i && nopen < 128) {
+                open[nopen++] = d;
+            }
+        }
+        iz n = 0;
+        for (i32 k = 0; k < nopen; k++) {
+            Decor *d = open[k];
+            if (d->kind == DK_QUOTE) {
+                memcpy(first + n, "> ", 2);
+                memcpy(rest + n, "> ", 2);
+                n += 2;
+                lt[i].quotes++;
+            } else {
+                u8  mk[16];
+                iz  m = item_marker(mk, d);
+                if (d->lo == i) {
+                    memcpy(first + n, mk, (uz)m);
+                } else {
+                    memset(first + n, ' ', (uz)m);
+                }
+                memset(rest + n, ' ', (uz)m);
+                n += m;
+            }
+        }
+        if (n) {
+            u8 *p = text_alloc(2*n);
+            memcpy(p, first, (uz)n);
+            memcpy(p + n, rest, (uz)n);
+            lt[i].first = (Str){p, n};
+            lt[i].rest  = (Str){p + n, n};
+        }
+    }
+    D.lt = lt;
+}
+
+// A code chunk's text as drawn, without the highlighter.
+static void code_plain(RB *rb, Leaf *l) {
+    Str all = l->node->text;
+    iz  beg = l->beg;
+    iz  end = l->end;
+    if (end>beg && all.data[end-1]=='\n') {
+        end--;
+    }
+    Run st = base_run(M_BODY, D.th->text);
+    st.font = FONT_MONOSPACE;
+    rb_code(rb, (Str){all.data + beg, end - beg}, &st);
+}
+
+// The text of segment k of a leaf, collected in rb.
+static void seg_runs(Leaf *l, i32 k, RB *rb) {
+    Run st = base_run(M_BODY, D.th->text);
+    switch (l->kind) {
+    case LK_TABLE: {
+        MdNode *c = table_cell_node(l, k);
+        if (c) {
+            inl_walk(rb, c, st);
+        }
+        break;
+    }
+    case LK_CODE:
+        code_plain(rb, l);
+        break;
+    case LK_HTML:
+        html_runs(rb, l->node->text, st);
+        break;
+    case LK_HEAD:
+    case LK_PARA:
+        inl_walk(rb, l->node, st);
+        break;
+    default:
+        break;
+    }
+}
+
+// The text of a leaf, or of a table cell (cell is -1 for the others). rb is
+// working memory, and holds nothing of use afterwards.
+static Seg seg_get(i32 leaf, i32 cell, RB *rb) {
+    doc_texts_init();
+    LText *t = D.lt + leaf;
+    i32    k = cell < 0 ? 0 : cell;
+    assert(k < t->nseg);
+    Seg *s = D.segs + t->seg0 + k;
+    if (!s->p) {
+        rb_reset(rb);
+        rb->plain = 1;
+        rb->avail = 100;
+        seg_runs(D.leaves + leaf, k, rb);
+        iz n  = rb->tlen;
+        u8 *p = text_alloc(2*n + 1);
+        if (n) {
+            memcpy(p, rb->tbuf, (uz)n);
+        }
+        fold_text(p + n, (Str){p, n});
+        s->p   = p;
+        s->len = n;
+    }
+    return *s;
+}
+
+static void doc_texts_all(RB *rb) {
+    doc_texts_init();
+    for (i32 i = 0; i < D.nleaves; i++) {
+        b32 table = D.leaves[i].kind == LK_TABLE;
+        for (i32 k = 0; k < D.lt[i].nseg; k++) {
+            seg_get(i, table ? k : -1, rb);
+        }
+    }
+}
+
+static i32 pos_cmp(DocPos a, DocPos b) {
+    if (a.leaf != b.leaf) {
+        return a.leaf < b.leaf ? -1 : 1;
+    }
+    if (a.cell != b.cell) {
+        return a.cell < b.cell ? -1 : 1;
+    }
+    return a.off < b.off ? -1 : a.off > b.off;
+}
+
+static DocPos pos_first(i32 leaf) {
+    return (DocPos){leaf, D.leaves[leaf].kind==LK_TABLE ? 0 : -1, 0};
+}
+
+static DocPos pos_last(i32 leaf, RB *rb) {
+    doc_texts_init();
+    i32 cell = D.leaves[leaf].kind==LK_TABLE ? D.lt[leaf].nseg - 1 : -1;
+    return (DocPos){leaf, cell, seg_get(leaf, cell, rb).len};
+}
+
+// The leaf and cell of segment g, counting all of them in reading order.
+static i32 seg_leaf(i32 g) {
+    i32 lo = 0, hi = D.nleaves;
+    while (lo < hi) {
+        i32 mid = (lo + hi) / 2;
+        if (D.lt[mid].seg0 <= g) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return max(lo - 1, 0);
+}
+
+static DocPos seg_pos(i32 g, iz off) {
+    i32 leaf = seg_leaf(g);
+    i32 k    = g - D.lt[leaf].seg0;
+    return (DocPos){leaf, D.leaves[leaf].kind==LK_TABLE ? k : -1, off};
+}
+
+static i32 pos_seg(DocPos p) {
+    return D.lt[p.leaf].seg0 + (p.cell < 0 ? 0 : p.cell);
+}
+
+
+// Image boxes. A box is 3 bytes in the paragraph and its alt text in the
+// plain text; positions convert between the two with the boxes of a normal
+// run of the paragraph, which rb holds after seg_boxes.
+
+static void seg_boxes(Leaf *l, i32 cell, RB *rb) {
+    rb_reset(rb);
+    if (l->kind == LK_TABLE) {
+        MdNode *c = table_cell_node(l, cell);
+        rb->avail = max(l->w/(f32)table_ncols(l), (f32)8);
+        if (c) {
+            inl_walk(rb, c, base_run(M_BODY*D.zoom, D.th->text));
+        }
+    } else {
+        leaf_runs(rb, l);
+    }
+}
+
+static iz plain_of_para(RB *rb, iz off) {
+    iz d = 0;
+    for (iz i = 0; i < rb->nboxes; i++) {
+        ImgBox *b = rb->boxes + i;
+        if (b->off + 3 > off) {
+            break;
+        }
+        d += b->alt - 3;
+    }
+    return off + d;
+}
+
+// A position inside the alt text of a box goes to the nearer side of the box.
+static iz para_of_plain(RB *rb, iz off) {
+    iz d = 0;
+    for (iz i = 0; i < rb->nboxes; i++) {
+        ImgBox *b = rb->boxes + i;
+        iz s = b->off + d;
+        if (off <= s) {
+            break;
+        }
+        if (off < s + b->alt) {
+            return off - s <= b->alt/2 ? b->off : b->off + 3;
+        }
+        d += b->alt - 3;
+    }
+    return off - d;
+}
+
+
+// Searching
+
+// The first match of the folded query in the segment at or after from, or -1.
+static iz fold_find(Seg s, Str fq, iz from) {
+    u8 const *h  = s.p + s.len;
+    iz        hn = s.len;
+    if (fq.len == 0 || fq.len > hn) {
+        return -1;
+    }
+    u8 q0 = fq.data[0];
+    for (iz i = max(from, (iz)0); i + fq.len <= hn; i++) {
+        if (h[i] != q0) {
+            continue;
+        }
+        iz k = 1;
+        while (k < fq.len && h[i+k] == fq.data[k]) {
+            k++;
+        }
+        if (k == fq.len) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+typedef struct {
+    i32    total;           // matches in the document
+    i32    n;               // the chosen one, counting from 1; 0 if none
+    DocPos pos;
+} FindScan;
+
+// Count the matches, none overlapping another, and choose one: the number
+// want_n, or if that is 0 the first at or after from. Wraps around to the
+// first when there is none after from.
+static FindScan doc_find_scan(Str fq, DocPos from, i32 want_n, RB *rb) {
+    FindScan r = {0};
+    if (!fq.len || !D.nleaves) {
+        return r;
+    }
+    doc_texts_all(rb);
+    DocPos first = {0}, last = {0};
+    b32 chosen = 0;
+    for (i32 g = 0; g < D.nsegs; g++) {
+        Seg s = D.segs[g];
+        if (s.len < fq.len) {
+            continue;
+        }
+        i32 leaf = seg_leaf(g);
+        i32 cell = D.leaves[leaf].kind==LK_TABLE ? g - D.lt[leaf].seg0 : -1;
+        for (iz at = 0;;) {
+            iz m = fold_find(s, fq, at);
+            if (m < 0) {
+                break;
+            }
+            DocPos here = {leaf, cell, m};
+            if (!r.total) {
+                first = here;
+            }
+            last = here;
+            r.total++;
+            if (!chosen && (want_n > 0 ? r.total == want_n : pos_cmp(here, from) >= 0)) {
+                chosen = 1;
+                r.n    = r.total;
+                r.pos  = here;
+            }
+            at = m + fq.len;
+        }
+    }
+    if (!chosen && r.total) {
+        b32 end = want_n > r.total;
+        r.n   = end ? r.total : 1;
+        r.pos = end ? last : first;
+    }
+    return r;
+}
+
+// The match after (dir > 0) or before cur, which must be one, wrapping around.
+static DocPos doc_find_step(Str fq, DocPos cur, i32 dir, RB *rb) {
+    doc_texts_all(rb);
+    i32 g0 = pos_seg(cur), n = D.nsegs;
+    if (dir > 0) {
+        iz m = fold_find(D.segs[g0], fq, cur.off + fq.len);
+        if (m >= 0) {
+            return seg_pos(g0, m);
+        }
+        for (i32 d = 1; d <= n; d++) {
+            i32 g = (g0 + d) % n;
+            m = fold_find(D.segs[g], fq, 0);
+            if (m >= 0) {
+                return seg_pos(g, m);
+            }
+        }
+        return cur;
+    }
+    iz best = -1;
+    for (iz at = 0;;) {
+        iz m = fold_find(D.segs[g0], fq, at);
+        if (m < 0 || m >= cur.off) {
+            break;
+        }
+        best = m;
+        at   = m + fq.len;
+    }
+    if (best >= 0) {
+        return seg_pos(g0, best);
+    }
+    for (i32 d = 1; d <= n; d++) {
+        i32 g = ((g0 - d) % n + n) % n;
+        for (iz at = 0;;) {
+            iz m = fold_find(D.segs[g], fq, at);
+            if (m < 0) {
+                break;
+            }
+            best = m;
+            at   = m + fq.len;
+        }
+        if (best >= 0) {
+            return seg_pos(g, best);
+        }
+    }
+    return cur;
+}
+
+
+// Words and lines
+
+static b32 is_word_rune(i32 c) {
+    return (c>='0' && c<='9') || (c>='A' && c<='Z') || (c>='a' && c<='z') || c=='_' ||
+           c==0xaa || c==0xb5 || c==0xba || (c>=0xc0 && c<=0x24f && c!=0xd7 && c!=0xf7) ||
+           (c>=0x250 && c<=0x36f) || (c>=0x370 && c<=0x3ff && c!=0x37e && c!=0x387) ||
+           (c>=0x400 && c<=0x52f) || (c>=0x531 && c<=0x58f) || (c>=0x5d0 && c<=0x5ea) ||
+           (c>=0x620 && c<=0x669) || (c>=0x900 && c<=0xdff) || (c>=0xe00 && c<=0xeff) ||
+           (c>=0x1e00 && c<=0x1fff) || (c>=0x3040 && c<=0x30ff) || (c>=0x3400 && c<=0x4dbf) ||
+           (c>=0x4e00 && c<=0x9fff) || (c>=0xac00 && c<=0xd7af) || (c>=0xff10 && c<=0xff19) ||
+           (c>=0xff21 && c<=0xff3a) || (c>=0xff41 && c<=0xff5a);
+}
+
+static i32 seg_rune(Seg s, iz off, iz *n) {
+    Utf8 d = utf8decode((Str){s.p + off, s.len - off});
+    *n = (s.len - off) - d.tail.len;
+    return d.rune;
+}
+
+static iz seg_prev(Seg s, iz off) {
+    off--;
+    while (off > 0 && (s.p[off] & 0xc0) == 0x80) {
+        off--;
+    }
+    return off;
+}
+
+// The word at off, or the single character if it is not part of a word.
+// The character is the one after off if right, else the one before.
+static void seg_word(Seg s, iz off, b32 right, iz *b, iz *e) {
+    iz  n1 = 0;
+    i32 c1 = off < s.len ? seg_rune(s, off, &n1) : -1;
+    iz  p0 = off > 0 ? seg_prev(s, off) : off;
+    iz  n0 = 0;
+    i32 c0 = off > 0 ? seg_rune(s, p0, &n0) : -1;
+    i32 c;
+    if (c1 >= 0 && (right || c0 < 0)) {
+        *b = off;
+        *e = off + n1;
+        c  = c1;
+    } else if (c0 >= 0) {
+        *b = p0;
+        *e = off;
+        c  = c0;
+    } else {
+        *b = *e = off;
+        return;
+    }
+    if (!is_word_rune(c)) {
+        return;
+    }
+    while (*b > 0) {
+        iz q = seg_prev(s, *b);
+        iz n = 0;
+        if (!is_word_rune(seg_rune(s, q, &n))) {
+            break;
+        }
+        *b = q;
+    }
+    while (*e < s.len) {
+        iz n = 0;
+        if (!is_word_rune(seg_rune(s, *e, &n))) {
+            break;
+        }
+        *e += n;
+    }
+}
+
+// What a triple click selects: the line of a code block, the whole text of
+// the others.
+static void seg_line(Leaf *l, Seg s, iz off, iz *b, iz *e) {
+    *b = 0;
+    *e = s.len;
+    if (l->kind != LK_CODE) {
+        return;
+    }
+    for (iz i = 0; i < off && i < s.len; i++) {
+        if (s.p[i] == '\n') {
+            *b = i + 1;
+        }
+    }
+    for (iz i = max(off, *b); i < s.len; i++) {
+        if (s.p[i] == '\n') {
+            *e = i;
+            break;
+        }
+    }
+}
+
+
+// Points and positions
+
+// The position nearest to p, in window coordinates at the given scroll.
+// *right (if not 0) says whether p is right of the position, that is over
+// the character after it rather than the one before.
+static DocPos doc_pos_at(Point pt, f32 scroll, RB *rb, b32 *right) {
+    if (right) {
+        *right = 1;
+    }
+    if (!D.nleaves) {
+        return (DocPos){0, -1, 0};
+    }
+    f32 dy = pt.y + scroll;
+    i32 i  = leaf_at(dy);
+    Leaf *l = D.leaves + i;
+    if (dy < l->y) {
+        return pos_first(i);
+    }
+    if (dy >= l->y + l->h) {
+        if (i + 1 >= D.nleaves) {
+            return pos_last(i, rb);
+        }
+        f32 d0 = dy - (l->y + l->h), d1 = D.leaves[i+1].y - dy;
+        return d0 <= d1 ? pos_last(i, rb) : pos_first(i + 1);
+    }
+    f32 x = D.colx + l->x;
+    f32 y = l->y - scroll;
+    Paragraph *p = 0;
+    Point o = {0};
+    i32 cell = -1;
+    if (l->kind == LK_TABLE) {
+        Table *tb = l->tb;
+        if (!tb || !tb->built) {
+            return pos_first(i);
+        }
+        f32 lx = pt.x - x, ly = pt.y - y;
+        i32 c = 0, r = 0;
+        for (i32 k = 0; k < tb->ncols; k++) {
+            c = lx >= tb->colx[k] ? k : c;
+        }
+        for (i32 k = 0; k < tb->nrows; k++) {
+            r = ly >= tb->rowy[k] ? k : r;
+        }
+        cell = r*tb->ncols + c;
+        p    = tb->cell[cell];
+        o    = (Point){x + tb->colx[c] + 1 + tb->padx, y + tb->rowy[r] + 1 + M_CELL_PADY*D.zoom};
+    } else {
+        p = l->p;
+        o = (Point){x + l->padl, y + l->padt};
+    }
+    if (!p) {
+        return (DocPos){i, cell, 0};
+    }
+    iz  off = os_para_hit(p, (Point){pt.x - o.x, pt.y - o.y}).offset;
+    Seg s   = seg_get(i, cell, rb);
+    if (l->flags & LF_IMAGES) {
+        seg_boxes(l, cell, rb);
+        off = plain_of_para(rb, off);
+    } else if (right && off <= s.len) {
+        Rect r[1];
+        if (off < s.len) {
+            iz n = 0;
+            seg_rune(s, off, &n);
+            if (os_para_rects(p, off, off + n, r, 1) >= 1) {
+                *right = pt.x >= o.x + r[0].x && pt.y >= o.y + r[0].y;
+            }
+        } else if (off > 0 && os_para_rects(p, seg_prev(s, off), off, r, 1) >= 1) {
+            *right = pt.x >= o.x + r[0].x + r[0].w && pt.y < o.y + r[0].y + r[0].h;
+        }
+    }
+    return (DocPos){i, cell, clampz(off, 0, s.len)};
+}
+
+// Where a range of text is, relative to the top of its leaf: the first
+// rectangle's top and height. False if the leaf has no paragraph now.
+static b32 doc_range_y(DocPos p, iz len, RB *rb, f32 *top, f32 *height) {
+    Leaf *l = D.leaves + p.leaf;
+    Paragraph *para = 0;
+    f32 oy = 0;
+    if (l->kind == LK_TABLE) {
+        Table *tb = l->tb;
+        if (!tb || !tb->built || p.cell < 0 || p.cell >= tb->nrows*tb->ncols) {
+            return 0;
+        }
+        para = tb->cell[p.cell];
+        oy   = tb->rowy[p.cell/tb->ncols] + 1 + M_CELL_PADY*D.zoom;
+    } else {
+        para = l->p;
+        oy   = l->padt;
+    }
+    if (!para) {
+        return 0;
+    }
+    iz b = p.off, e = p.off + len;
+    seg_get(p.leaf, p.cell, rb);
+    if (l->flags & LF_IMAGES) {
+        seg_boxes(l, p.cell, rb);
+        b = para_of_plain(rb, b);
+        e = para_of_plain(rb, e);
+    }
+    Rect r[1];
+    if (e <= b || os_para_rects(para, b, e, r, 1) < 1) {
+        return 0;
+    }
+    *top    = oy + r[0].y;
+    *height = r[0].h;
+    return 1;
+}
+
+
+// Copying
+
+typedef struct {
+    u8 *out;                // 0 to only count
+    iz  n;
+} Sink;
+
+static void sink_put(Sink *k, u8 const *p, iz n) {
+    if (n > 0) {
+        if (k->out) {
+            memcpy(k->out + k->n, p, (uz)n);
+        }
+        k->n += n;
+    }
+}
+
+static void sink_str(Sink *k, Str s) {
+    sink_put(k, s.data, s.len);
+}
+
+static Str trim_blanks(Str s) {
+    while (s.len && s.data[s.len-1]==' ') {
+        s.len--;
+    }
+    return s;
+}
+
+// Text as lines: first goes before the first one, rest before the others.
+static void sink_lines(Sink *k, Str first, Str rest, Str text) {
+    for (iz i = 0, line = 0;; line++) {
+        iz e = i;
+        while (e < text.len && text.data[e] != '\n') {
+            e++;
+        }
+        Str pfx = line ? rest : first;
+        if (line) {
+            sink_str(k, S("\n"));
+        }
+        sink_str(k, e > i ? pfx : trim_blanks(pfx));
+        sink_put(k, text.data + i, e - i);
+        if (e >= text.len) {
+            break;
+        }
+        i = e + 1;
+    }
+}
+
+// Table cell text on one line.
+static void sink_cell(Sink *k, Str text) {
+    for (iz i = 0; i < text.len;) {
+        iz e = i;
+        while (e < text.len && text.data[e] != '\n') {
+            e++;
+        }
+        sink_put(k, text.data + i, e - i);
+        if (e < text.len) {
+            sink_str(k, S(" "));
+        }
+        i = e + 1;
+    }
+}
+
+// The text from lo to hi as a reader would copy it. Paragraphs are separated
+// by a blank line, list items and table rows by a line break; list markers
+// and quote marks are put back when more than one leaf is covered, but not
+// before a first leaf that starts partway. Returns the length, and writes
+// it to out unless that is 0.
+static iz doc_copy(DocPos lo, DocPos hi, u8 *out, RB *rb) {
+    doc_texts_init();
+    Sink k = {out, 0};
+    b32  multi = lo.leaf != hi.leaf;
+    i32  prev  = -1;
+    for (i32 i = lo.leaf; i <= hi.leaf && i < D.nleaves; i++) {
+        Leaf  *l = D.leaves + i;
+        LText *t = D.lt + i;
+        if (l->kind == LK_RULE) {
+            continue;
+        }
+        if (prev >= 0) {
+            sink_str(&k, S("\n"));
+            if (max(D.leaves[prev].mb, l->mt) >= 8) {
+                i32 q = min(D.lt[prev].quotes, t->quotes);
+                for (i32 j = 0; j < q; j++) {
+                    sink_str(&k, j + 1 < q ? S("> ") : S(">"));
+                }
+                sink_str(&k, S("\n"));
+            }
+        }
+        prev = i;
+        b32 whole = i != lo.leaf || (lo.off == 0 && lo.cell <= 0);
+        Str first = multi && whole ? t->first : (Str){0};
+        Str rest  = multi ? t->rest : (Str){0};
+        b32 table = l->kind == LK_TABLE;
+        i32 c0    = table && i == lo.leaf ? lo.cell : 0;
+        i32 c1    = table ? (i == hi.leaf ? hi.cell : t->nseg - 1) : 0;
+        iz  nc    = table ? table_ncols(l) : 1;
+        for (i32 c = c0; c <= c1; c++) {
+            Seg s = seg_get(i, table ? c : -1, rb);
+            iz  b = i == lo.leaf && (!table || c == lo.cell) ? clampz(lo.off, 0, s.len) : 0;
+            iz  e = i == hi.leaf && (!table || c == hi.cell) ? clampz(hi.off, 0, s.len) : s.len;
+            Str text = {s.p + b, max(e - b, (iz)0)};
+            if (!table) {
+                sink_lines(&k, first, rest, text);
+            } else {
+                if (c == c0) {
+                    sink_str(&k, first);
+                } else if (c % nc == 0) {
+                    sink_str(&k, S("\n"));
+                    sink_str(&k, rest);
+                } else {
+                    sink_str(&k, S("\t"));
+                }
+                sink_cell(&k, text);
+            }
+        }
+    }
+    return k.n;
+}
+
+
 // Painting
 
 static void draw_spans(RB *rb, Paragraph *p, Point o) {
@@ -1778,7 +2608,69 @@ static void draw_spans(RB *rb, Paragraph *p, Point o) {
     }
 }
 
-static void draw_boxes(RB *rb, Paragraph *p, Point o) {
+// Where a range of plain text is in the paragraph, filled. Offsets go
+// through the boxes of rb if boxes is set.
+static void fill_range(Paragraph *p, Point o, RB *rb, b32 boxes, iz b, iz e, Color c) {
+    if (boxes) {
+        b = para_of_plain(rb, b);
+        e = para_of_plain(rb, e);
+    }
+    iz n = e > b ? os_para_rects(p, b, e, 0, 0) : 0;
+    if (n <= 0) {
+        return;
+    }
+    Arena t  = *rb->a;      // free space: the rectangles are used and forgotten
+    Rect *r  = new(&t, n, Rect);
+    os_para_rects(p, b, e, r, n);
+    for (iz k = 0; k < n; k++) {
+        os_fill_rect((Rect){o.x + r[k].x, o.y + r[k].y, r[k].w, r[k].h}, c);
+    }
+}
+
+// The part of the selection in a piece of text of len bytes.
+static b32 sel_in(i32 leaf, i32 cell, iz len, iz *b, iz *e) {
+    if (!D.sel_on) {
+        return 0;
+    }
+    DocPos s0 = {leaf, cell, 0}, s1 = {leaf, cell, len};
+    if (pos_cmp(D.sel_hi, s0) <= 0 || pos_cmp(D.sel_lo, s1) >= 0) {
+        return 0;
+    }
+    *b = pos_cmp(D.sel_lo, s0) > 0 ? D.sel_lo.off : 0;
+    *e = pos_cmp(D.sel_hi, s1) < 0 ? D.sel_hi.off : len;
+    return *e > *b;
+}
+
+static b32 marks_on(void) {
+    return D.sel_on || D.find_q.len;
+}
+
+// Find matches and the selection, behind the text. s is the text of the
+// paragraph. If boxes, rb holds a normal run of it and the range of the
+// paragraph that is selected goes to tint, for the images in it.
+static void draw_marks(i32 leaf, i32 cell, Seg s, Paragraph *p, Point o, RB *rb, b32 boxes, iz *tint) {
+    Theme const *t = D.th;
+    if (D.find_q.len) {
+        i32 guard = 0;
+        for (iz at = 0; guard < 2000; guard++) {
+            iz m = fold_find(s, D.find_q, at);
+            if (m < 0) {
+                break;
+            }
+            b32 cur = D.find_ok && D.find_cur.leaf==leaf && D.find_cur.cell==cell && D.find_cur.off==m;
+            fill_range(p, o, rb, boxes, m, m + D.find_q.len, cur ? t->find_cur : t->find);
+            at = m + D.find_q.len;
+        }
+    }
+    iz b, e;
+    if (sel_in(leaf, cell, s.len, &b, &e)) {
+        fill_range(p, o, rb, boxes, b, e, t->sel);
+        tint[0] = boxes ? para_of_plain(rb, b) : b;
+        tint[1] = boxes ? para_of_plain(rb, e) : e;
+    }
+}
+
+static void draw_boxes(RB *rb, Paragraph *p, Point o, iz const *tint) {
     for (iz i = 0; i < rb->nboxes; i++) {
         // The platform says where the box is horizontally and on which line;
         // its size is known, and it stands on the baseline.
@@ -1798,12 +2690,16 @@ static void draw_boxes(RB *rb, Paragraph *p, Point o) {
             if (e->frames > 1) {
                 D.anim = 1;
             }
-            os_image_draw(e->im, e->frame, (Rect){o.x + r.x, o.y + base - bx->h, bx->w, bx->h});
+            Rect dst = {o.x + r.x, o.y + base - bx->h, bx->w, bx->h};
+            os_image_draw(e->im, e->frame, dst);
+            if (tint[0] <= bx->off && bx->off + 3 <= tint[1]) {
+                os_fill_rect(dst, D.th->sel);
+            }
         }
     }
 }
 
-static void draw_table(Leaf *l, f32 x, f32 y, RB *rb) {
+static void draw_table(Leaf *l, i32 leaf, f32 x, f32 y, RB *rb) {
     f32 z = D.zoom;
     Table *tb = l->tb;
     if (!tb || !tb->built) {
@@ -1832,17 +2728,26 @@ static void draw_table(Leaf *l, f32 x, f32 y, RB *rb) {
                 continue;
             }
             Point o = {x + tb->colx[c] + 1 + padx, y + tb->rowy[r] + 1 + pady};
-            if (l->flags & LF_EXTRAS) {
+            Seg s = {0};
+            if (marks_on()) {
+                s = seg_get(leaf, r*tb->ncols + c, rb);
+            }
+            b32 extras = !!(l->flags & LF_EXTRAS);
+            iz  tint[2] = {0, 0};
+            if (extras) {
                 rb_reset(rb);
                 rb->avail = max(l->w/(f32)tb->ncols, (f32)8);
                 Run st = base_run(M_BODY*z, t->text);
                 st.bold = !!(row->flags & MD_F_HEADER);
                 inl_walk(rb, cell, st);
                 draw_spans(rb, p, o);
-                os_para_draw(p, o);
-                draw_boxes(rb, p, o);
-            } else {
-                os_para_draw(p, o);
+            }
+            if (marks_on()) {
+                draw_marks(leaf, r*tb->ncols + c, s, p, o, rb, extras, tint);
+            }
+            os_para_draw(p, o);
+            if (extras) {
+                draw_boxes(rb, p, o, tint);
             }
         }
     }
@@ -1964,21 +2869,30 @@ static void doc_paint(f32 scroll, Size size, RB *rb) {
             os_fill_rect((Rect){x, y, l->w, 4*z}, t->rule);
             break;
         case LK_TABLE:
-            draw_table(l, x, y, rb);
+            draw_table(l, i, x, y, rb);
             break;
         case LK_EMPTY:
             break;
         default:
             if (l->p) {
                 Point o = {x + l->padl, y + l->padt};
-                if (l->flags & LF_EXTRAS) {
+                Seg s = {0};
+                if (marks_on()) {
+                    s = seg_get(i, -1, rb);
+                }
+                b32 extras = !!(l->flags & LF_EXTRAS);
+                iz  tint[2] = {0, 0};
+                if (extras) {
                     rb_reset(rb);
                     leaf_runs(rb, l);
                     draw_spans(rb, l->p, o);
-                    os_para_draw(l->p, o);
-                    draw_boxes(rb, l->p, o);
-                } else {
-                    os_para_draw(l->p, o);
+                }
+                if (marks_on()) {
+                    draw_marks(i, -1, s, l->p, o, rb, extras, tint);
+                }
+                os_para_draw(l->p, o);
+                if (extras) {
+                    draw_boxes(rb, l->p, o, tint);
                 }
             }
             if (l->kind==LK_HEAD && l->level<=2) {

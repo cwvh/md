@@ -261,7 +261,17 @@ static b32 os_open_url(Str url);
 // into the arena and returns 1.
 static b32 os_open_dialog(Arena *a, Str *path);
 
+// The clipboard as UTF-8 text. Line breaks in what the app hands over are
+// LF; the platform converts to and from what its clipboard uses.
 static void os_clipboard_set(Str utf8);
+
+// The clipboard's text, copied into the arena (with LF line breaks), or 0
+// if it holds none or it won't fit.
+static b32 os_clipboard_get(Arena *a, Str *out);
+
+// Milliseconds on a monotonic clock, from an arbitrary start. For telling
+// double and triple clicks apart.
+static u64 os_time_ms(void);
 
 
 // Input
