@@ -1,3 +1,4 @@
+* text=auto eol=lf
 test/img/* binary
 test/img/gen.py text
 test/images/*.png binary
