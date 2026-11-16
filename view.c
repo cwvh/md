@@ -550,6 +550,7 @@ static void find_reveal(void) {
         // Not laid out yet: go to its leaf, then look again.
         pin_to((Anchor){f->cur.leaf, -V.size.h/3, l->line});
         layout_now();
+        work_init(&w);      // layout_now used the same memory
         if (!doc_range_y(f->cur, f->len, &w.rb, &top, &h)) {
             return;
         }

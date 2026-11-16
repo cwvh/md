@@ -499,6 +499,7 @@ typedef struct {
     b32     lastspace;
     b32     over;           // out of memory: the rest is dropped
     b32     plain;          // plain text for copy and find: images are their alt text
+    iz      boxend;         // plain: where the last image's alt text ends, 0 for none
 } RB;
 
 static void *rb_grow(RB *rb, void *old, iz used, iz *cap, iz want, iz size) {
@@ -530,6 +531,7 @@ static void rb_reset(RB *rb) {
     rb->lastspace = 0;
     rb->over     = 0;
     rb->plain    = 0;
+    rb->boxend   = 0;
 }
 
 static void rb_init(RB *rb, Arena *a) {
@@ -661,7 +663,8 @@ static void rb_newlines(RB *rb, i32 want, Run const *st) {
     if (rb->len == 0) {
         return;
     }
-    if (rb->n && rb->runs[rb->n-1].box_w > 0) {
+    // An image stands alone on its line.
+    if ((rb->n && rb->runs[rb->n-1].box_w > 0) || (rb->boxend && rb->tlen == rb->boxend)) {
         rb_text(rb, S("\n"), st);
         want--;
     }
@@ -674,10 +677,11 @@ static void rb_newlines(RB *rb, i32 want, Run const *st) {
 
 // Drop trailing blanks and newlines.
 static void rb_trim(RB *rb) {
-    while (rb->n && rb->runs[rb->n-1].box_w == 0) {
+    while (rb->n && rb->runs[rb->n-1].box_w == 0 && rb->tlen > rb->boxend) {
         Run *r = rb->runs + rb->n - 1;
-        while (r->text.len && (rb->tbuf[rb->off[rb->n-1] + r->text.len - 1]==' ' ||
-                               rb->tbuf[rb->off[rb->n-1] + r->text.len - 1]=='\n')) {
+        while (r->text.len && rb->tlen > rb->boxend &&
+               (rb->tbuf[rb->off[rb->n-1] + r->text.len - 1]==' ' ||
+                rb->tbuf[rb->off[rb->n-1] + r->text.len - 1]=='\n')) {
             r->text.len--;
             rb->tlen--;
             rb->len--;
@@ -801,6 +805,9 @@ static void rb_image(RB *rb, Str src, Str alt, f32 reqw, f32 reqh, Run const *st
     iz beg = rb->len;
     rb_text(rb, text, &r);
     rb_span(rb, beg, rb->len, SP_BORDER);
+    if (rb->plain) {
+        rb->boxend = rb->tlen;
+    }
 }
 
 static void html_img(RB *rb, HtmlTag const *t, Run const *st) {
@@ -986,7 +993,10 @@ static void inl_walk(RB *rb, MdNode *parent, Run st) {
             break;
         }
         case MD_IMAGE: {
-            Str alt = md_plain(rb->a, c);
+            // The alt text is usually one piece of text, in the document already.
+            Str alt = !c->first ? (Str){0} :
+                      !c->first->next && c->first->kind==MD_TEXT ? c->first->text :
+                      md_plain(rb->a, c);
             rb_image(rb, c->dest, alt, 0, 0, &st);
             break;
         }
@@ -2040,14 +2050,28 @@ static Seg seg_get(i32 leaf, i32 cell, RB *rb) {
     return *s;
 }
 
-static void doc_texts_all(RB *rb) {
+// Make the text of leaves lo to hi. The working memory is started over for
+// each text, so that a whole document does not use up more than one needs.
+static void doc_texts(i32 lo, i32 hi, RB *rb) {
     doc_texts_init();
-    for (i32 i = 0; i < D.nleaves; i++) {
+    Arena *a  = rb->a;
+    Arena  a0 = *a;
+    for (i32 i = max(lo, 0); i <= hi && i < D.nleaves; i++) {
         b32 table = D.leaves[i].kind == LK_TABLE;
         for (i32 k = 0; k < D.lt[i].nseg; k++) {
-            seg_get(i, table ? k : -1, rb);
+            if (!D.segs[D.lt[i].seg0 + k].p) {
+                *a = a0;
+                rb_init(rb, a);
+                seg_get(i, table ? k : -1, rb);
+            }
         }
     }
+    *a = a0;
+    rb_init(rb, a);
+}
+
+static void doc_texts_all(RB *rb) {
+    doc_texts(0, D.nleaves - 1, rb);
 }
 
 static i32 pos_cmp(DocPos a, DocPos b) {
@@ -2534,7 +2558,7 @@ static void sink_cell(Sink *k, Str text) {
 // before a first leaf that starts partway. Returns the length, and writes
 // it to out unless that is 0.
 static iz doc_copy(DocPos lo, DocPos hi, u8 *out, RB *rb) {
-    doc_texts_init();
+    doc_texts(lo.leaf, hi.leaf, rb);
     Sink k = {out, 0};
     b32  multi = lo.leaf != hi.leaf;
     i32  prev  = -1;

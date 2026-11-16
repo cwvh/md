@@ -6,10 +6,14 @@
 //
 // Three kinds of test:
 //   unit     fixed documents and scripted input: layout invariants at many
-//            widths, resizing, links, history, images, zoom, reload, leaks
-//   random   random Markdown, random window sizes, scrolls, zooms, keys and
-//            clicks, with invariants checked after every paint
-//   time     a 1 MB document must load and paint within a budget
+//            widths, resizing, links, history, images, zoom, reload, leaks;
+//            selecting (by mouse, words, lines, Shift+click, auto-scroll),
+//            copying (golden strings for every block) and finding
+//   random   random Markdown, random window sizes, scrolls, zooms, keys,
+//            clicks, selection drags, copies and find sessions, with
+//            invariants checked after every paint
+//   time     a 1 MB document must load, paint, select all, copy and be
+//            searched within a budget
 //
 // Iteration i of seed s is self-contained: it derives its own generator from
 // (s, i), so "-s S -i I -n 1 -t random" replays exactly it.
@@ -64,6 +68,7 @@ typedef struct {
     Output     *out;
     b32         dead;
     u64         checks;     // how many CHECKs passed
+    u64         n_sel, n_copy, n_find, n_multi;    // what the random test got to see
     volatile u64 progress;
 } Ctx;
 static Ctx ctx;
@@ -208,6 +213,9 @@ typedef struct {
 static void bput(Buf *b, Str s) {
     if (s.len > b->cap - b->len) {
         s.len = b->cap - b->len;
+        while (s.len > 0 && s.len < (iz)0x7fffffff && (s.data[s.len] & 0xc0) == 0x80) {
+            s.len--;        // not in the middle of a character
+        }
     }
     memcpy(b->p + b->len, s.data, (uz)s.len);
     b->len += s.len;
@@ -360,11 +368,78 @@ static void check_layout(void) {
     }
 }
 
+static b32 valid_utf8(Str s);
+static Str clip(void);
+static void check_texts(void);
+
+// A position names a place in the text: a leaf, a cell of it if a table,
+// and a character boundary.
+static void check_pos(DocPos p, char const *what) {
+    CHECK2(p.leaf >= 0 && p.leaf < D.nleaves, what, p.leaf, D.nleaves);
+    Leaf *l = D.leaves + p.leaf;
+    Arena s = rig.scratch;
+    RB rb;
+    rb_init(&rb, &s);
+    if (l->kind == LK_TABLE) {
+        CHECK2(p.cell >= 0 && p.cell < l->n*table_ncols(l), what, p.cell, l->n);
+    } else {
+        CHECK2(p.cell == -1, what, p.cell, p.leaf);
+    }
+    Seg sg = seg_get(p.leaf, p.cell, &rb);
+    CHECK2(p.off >= 0 && p.off <= sg.len, what, p.off, sg.len);
+    CHECK2(p.off == sg.len || (sg.p[p.off] & 0xc0) != 0x80, what, p.off, sg.len);
+}
+
+// What is true of the selection, the find bar and the clipboard.
+static void check_text_state(void) {
+    if (fk.clipset) {
+        ctx.n_copy++;
+        CHECK(valid_utf8(clip()), "the clipboard text is not valid UTF-8");
+        Str c = clip();
+        CHECK(!icontains(c, S("\xEF\xBF\xBC")), "an image box got into the copied text");
+        fk.clipset = 0;
+    }
+    if (fk.timer_on[SEL_TIMER]) {
+        CHECK(V.sel.down && V.sel.timer, "auto-scroll timer without a drag");
+    }
+    CHECK(V.sel.timer == fk.timer_on[SEL_TIMER], "timer state matches");
+    CHECK(D.sel_on == V.sel.on, "painter knows the selection");
+    if (V.sel.on) {
+        ctx.n_sel++;
+        DocPos lo, hi;
+        sel_bounds(&lo, &hi);
+        CHECK(pos_cmp(lo, hi) < 0, "selection is ordered and not empty");
+        check_pos(lo, "selection start");
+        check_pos(hi, "selection end");
+        CHECK(pos_cmp(D.sel_lo, lo) == 0 && pos_cmp(D.sel_hi, hi) == 0, "painter knows where");
+    }
+    Find *f = &V.find;
+    CHECK(!f->stale || !f->open, "find results are fresh after a paint");
+    CHECK(f->len >= 0 && f->len <= FIND_MAX && f->caret >= 0 && f->caret <= f->len, "find field");
+    CHECK(valid_utf8((Str){f->text, f->len}), "find field text is valid UTF-8");
+    CHECK(D.find_q.len == (f->open ? f->len : 0), "painter knows the query");
+    if (f->open && f->have) {
+        ctx.n_find++;
+        ctx.n_multi += f->total > 1;
+        CHECK2(f->n >= 1 && f->n <= f->total, "match number in range", f->n, f->total);
+        check_pos(f->cur, "current match");
+        Arena s = rig.scratch;
+        RB rb;
+        rb_init(&rb, &s);
+        Seg sg = seg_get(f->cur.leaf, f->cur.cell, &rb);
+        CHECK(f->cur.off + f->len <= sg.len, "the match is inside its text");
+        CHECK(equals((Str){sg.p + sg.len + f->cur.off, f->len}, (Str){f->fold, f->len}), "the current match matches");
+    } else if (f->open) {
+        CHECK(f->total == 0 || f->len == 0, "no current match only without results");
+    }
+}
+
 // What is true after any paint.
 static void check_state(void) {
     if (V.state != VS_DOC) {
         return;
     }
+    check_text_state();
     CHECK(V.scroll == V.scroll, "scroll is NaN");
     CHECK2(V.scroll >= 0 && V.scroll <= max_scroll() + 0.01f, "scroll out of range", (i64)V.scroll, (i64)max_scroll());
     f32 prev = 0;
@@ -2053,6 +2128,24 @@ static void check_texts(void) {
                 seg_boxes(l, cell, &rb);
                 len = plain_of_para(&rb, len);
             }
+            if (sg.len != len) {
+                Output *o = ctx.out;
+                print(o, S("kind "));
+                printi64(o, l->kind);
+                print(o, S(" flags "));
+                printi64(o, l->flags);
+                print(o, S(" plain "));
+                printi64(o, sg.len);
+                print(o, S(" para "));
+                printi64(o, len);
+                print(o, S(" "));
+                print_esc(o, (Str){sg.p, sg.len});
+                if (p) {
+                    print(o, S(" "));
+                    print_esc(o, (Str){p->text, p->len});
+                }
+                print(o, S("\n"));
+            }
             CHECK2(sg.len == len, "plain text and paragraph text differ in length", i, k);
             CHECK2(valid_utf8((Str){sg.p, sg.len}), "plain text is not valid UTF-8", i, k);
             if (p && !(l->flags & LF_IMAGES)) {
@@ -2300,7 +2393,7 @@ static Str gen_doc(u64 *r) {
 
 static void random_op(u64 *r) {
     Size w = fk.window;
-    switch (rnd(r, 30)) {
+    switch (rnd(r, 50)) {
     case 0: case 1:
         resize(rndf(r, 160, 1500), rndf(r, 120, 900));
         break;
@@ -2363,6 +2456,7 @@ static void random_op(u64 *r) {
         if (V.state == VS_DOC && D.nleaves) {
             layout_all();
             check_layout();
+            check_texts();
         }
         break;
     case 25:
@@ -2373,6 +2467,107 @@ static void random_op(u64 *r) {
         break;
     case 27:
         app_char(0x41);
+        break;
+    case 30: case 31: case 32: {
+        // Drag a selection, sometimes out of the window, with the timer ticking
+        Point a = {rndf(r, 0, w.w), rndf(r, 0, w.h)};
+        app_mouse_move(a, 0);
+        app_mouse_down(a, BUTTON_LEFT, chance(r, 15) ? MOD_SHIFT : 0);
+        i32 moves = 1 + (i32)rnd(r, 5);
+        for (i32 i = 0; i < moves; i++) {
+            Point b = {rndf(r, -20, w.w + 20), rndf(r, -80, w.h + 80)};
+            app_mouse_move(b, 0);
+            for (i32 k = (i32)rnd(r, 4); k > 0; k--) {
+                app_timer(SEL_TIMER);
+            }
+            if (chance(r, 20)) {
+                paint();
+                check_state();
+            }
+        }
+        if (chance(r, 90)) {
+            app_mouse_up((Point){rndf(r, -20, w.w + 20), rndf(r, -80, w.h + 80)}, BUTTON_LEFT, 0);
+        }
+        break;
+    }
+    case 33:
+        key(KEY_A, MOD_PRIMARY);
+        break;
+    case 34:
+        fk.clipset = 0;
+        key(chance(r, 70) ? KEY_C : KEY_INSERT, MOD_PRIMARY);
+        break;
+    case 35:
+        key(KEY_ESCAPE, 0);
+        break;
+    case 36: {
+        Point p = {rndf(r, 0, w.w), rndf(r, 0, w.h)};
+        fk.now += rnd(r, 3) ? 50 : 900;
+        if (chance(r, 50)) {
+            app_mouse_down(p, BUTTON_LEFT, 0);
+            app_mouse_up(p, BUTTON_LEFT, 0);
+        }
+        app_double_click(p, 0);
+        app_mouse_up(p, BUTTON_LEFT, 0);
+        if (chance(r, 60)) {
+            fk.now += 100;
+            app_mouse_down(p, BUTTON_LEFT, 0);
+            app_mouse_up(p, BUTTON_LEFT, 0);
+        }
+        break;
+    }
+    case 37: case 38:
+        key(chance(r, 70) ? KEY_F : KEY_F3, chance(r, 70) ? MOD_PRIMARY : 0);
+        break;
+    case 39: case 40: case 41: {
+        // Type: a word, or part of one, or something odd
+        if (chance(r, 70)) {
+            Str t = cstr(words[rnd(r, countof(words))]);
+            iz  n = chance(r, 50) ? t.len : 1 + (iz)rnd(r, (u64)t.len);
+            while (n > 0 && n < t.len && (t.data[n] & 0xc0) == 0x80) {
+                n--;
+            }
+            for (Str u = {t.data, n}; u.len;) {
+                Utf8 d = utf8decode(u);
+                app_char(chance(r, 10) ? d.rune - 32*(d.rune >= 'a' && d.rune <= 'z') : d.rune);
+                u = d.tail;
+            }
+        } else {
+            static i32 const odd[] = {' ', 0x7f, 0x1f, 0xfffd, 0x10000, 0x1f600, 0xd800, 'A', 0xdc00, 0x110000, -1};
+            app_char(odd[rnd(r, countof(odd))]);
+        }
+        break;
+    }
+    case 42: case 43: {
+        static Key const fk_[] = {KEY_ENTER, KEY_BACKSPACE, KEY_DELETE, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
+                                  KEY_F3, KEY_V, KEY_C, KEY_X, KEY_A, KEY_G, KEY_INSERT, KEY_SPACE, KEY_ESCAPE};
+        key(fk_[rnd(r, countof(fk_))], (u32)rnd(r, 8));
+        break;
+    }
+    case 44:
+        app_timer(SEL_TIMER);
+        break;
+    case 45:
+        fk.now += rnd(r, 1200);
+        break;
+    case 46:
+        if (chance(r, 50)) {
+            fk_free(fk.clip);
+            fk.clip    = fk_alloc(40, 1);
+            fk.cliplen = 0;
+            for (iz n = (iz)rnd(r, 20); n > 0; n--) {
+                static Str const pool[] = {S("a"), S("b"), S(" "), S("\n"), S("\r\n"), S("\xC3\xA9"), S("x")};
+                Str t = pool[rnd(r, countof(pool))];
+                memcpy(fk.clip + fk.cliplen, t.data, (uz)t.len);
+                fk.cliplen += t.len;
+            }
+        }
+        break;
+    case 47:
+        if (V.find.open && V.find.len && chance(r, 70)) {
+            Point q = {rndf(r, 0, w.w), rndf(r, 0, 60)};
+            click_at(q, 0);
+        }
         break;
     default:
         break;
@@ -2409,6 +2604,7 @@ static void random_iteration(u64 seed, i64 iter) {
         resize(rndf(r, 160, 1500), rndf(r, 120, 900));
         layout_all();
         check_layout();
+        check_texts();
         check_state();
     }
     app_close();
@@ -2496,6 +2692,75 @@ static void test_time(void) {
     CHECK2((t2 - t1)/1000 < 500, "first paint took too long (ms)", (t2 - t1)/1000, 0);
     CHECK2(worst/1000 < 250, "a scrolled paint took too long (ms)", worst/1000, 0);
     CHECK(fk.live_paras < 700, "lazy layout keeps few paragraphs");
+
+    // Find on the whole document: the first key makes the text of every
+    // leaf, the rest only search it.
+    key(KEY_HOME, 0);
+    paint();
+    key(KEY_F, MOD_PRIMARY);
+    i64 first = 0, rest = 0;
+    char const *query = "dolor";
+    for (i32 i = 0; query[i]; i++) {
+        i64 a = now_us();
+        app_char(query[i]);
+        i64 d = now_us() - a;
+        if (i == 0) {
+            first = d;
+        } else {
+            rest = max(rest, d);
+        }
+    }
+    CHECK2(V.find.total > 1000, "found many matches", V.find.total, 0);
+    i64 step = 0;
+    for (i32 i = 0; i < 20; i++) {
+        i64 a = now_us();
+        key(KEY_ENTER, i%3 ? 0 : MOD_SHIFT);
+        step = max(step, now_us() - a);
+        paint();
+    }
+    i64 matches = V.find.total;
+    key(KEY_ESCAPE, 0);
+    CHECK(fk.live_paras < 700, "find does not make paragraphs for the whole document");
+
+    // Select everything and copy it, from a freshly loaded document.
+    app_file_changed();
+    paint();
+    i64 s0 = now_us();
+    key(KEY_A, MOD_PRIMARY);
+    paint();
+    i64 s1 = now_us();
+    fk.clipset = 0;
+    key(KEY_C, MOD_PRIMARY);
+    i64 s2 = now_us();
+    CHECK(fk.clipset && clip().len > doc.len/2 && clip().len < doc.len, "everything was copied");
+    CHECK(valid_utf8(clip()), "copied text is valid");
+    CHECK(fk.live_paras < 700, "select all and copy do not make paragraphs for the whole document");
+    i64 s3 = now_us();
+    key(KEY_C, MOD_PRIMARY);
+    i64 s4 = now_us();
+    print(o, S("time: find: first key "));
+    printi64(o, first/1000);
+    print(o, S(" ms (all text made), next keys worst "));
+    printi64(o, rest/1000);
+    print(o, S(" ms, next/previous worst "));
+    printi64(o, step/1000);
+    print(o, S(" ms, "));
+    printi64(o, matches);
+    print(o, S(" matches; select all "));
+    printi64(o, (s1 - s0)/1000);
+    print(o, S(" ms, copy "));
+    printi64(o, (s2 - s1)/1000);
+    print(o, S(" ms (then "));
+    printi64(o, (s4 - s3)/1000);
+    print(o, S(" ms), "));
+    printi64(o, clip().len);
+    print(o, S(" bytes\n"));
+    flush(o);
+    CHECK2(first/1000 < 1500, "first find key took too long (ms)", first/1000, 0);
+    CHECK2(rest/1000 < 100, "find key took too long (ms)", rest/1000, 0);
+    CHECK2(step/1000 < 100, "find next took too long (ms)", step/1000, 0);
+    CHECK2((s1 - s0)/1000 < 500, "select all took too long (ms)", (s1 - s0)/1000, 0);
+    CHECK2((s2 - s1)/1000 < 1500, "copy took too long (ms)", (s2 - s1)/1000, 0);
     app_close();
     CHECK(fk.live_paras == 0, "leak");
 }
@@ -2616,7 +2881,15 @@ static i32 run(Arena all) {
         printhex(o, seed);
         print(o, S(" iters="));
         printi64(o, (i64)iters);
-        print(o, S("\n"));
+        print(o, S(" (seen: selections "));
+        printi64(o, (i64)ctx.n_sel);
+        print(o, S(", copies "));
+        printi64(o, (i64)ctx.n_copy);
+        print(o, S(", find matches "));
+        printi64(o, (i64)ctx.n_find);
+        print(o, S(", of those with more than one "));
+        printi64(o, (i64)ctx.n_multi);
+        print(o, S(")\n"));
     }
     if (all_tests || equals(which, S("time"))) {
         test_time();
