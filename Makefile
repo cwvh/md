@@ -11,11 +11,12 @@ GUI      = -mwindows
 # Only DLLs that ship with Windows. libgcc for ___chkstk_ms. -nostdlib
 # keeps msvcrt out, so a stray libc call is a link error, not an import.
 LDLIBS   = -lkernel32 -luser32 -lgdi32 -lole32 -ladvapi32 -lshell32 \
-           -lcomdlg32 -ldwmapi -ld2d1 -ldwrite -lwindowscodecs -lgcc
+           -lcomdlg32 -ldwmapi -ld2d1 -ldwrite -lgcc
 TESTLIBS = -lkernel32 -lgcc
+IMGLIBS  = -lkernel32 -lole32 -lgcc
 # Portable core, then the Windows layer.
 CORE     = base.c platform.h md.c mdtables.c highlight.c layout.c view.c
-SRC      = $(CORE) win32.c gfx.c
+SRC      = $(CORE) win32.c image.c gfx.c
 
 md.exe: main.c $(SRC)
 	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(LDLIBS)
@@ -37,12 +38,18 @@ hl-test.exe: hltest.c base.c win32.c highlight.c
 view-test.exe: viewtest.c fakeos.c $(CORE) win32.c
 	$(CC) $(CFLAGS) $(DEBUG) -o $@ viewtest.c $(TESTLIBS)
 
-TESTS    = md-test.exe hl-test.exe view-test.exe
+# Image decoding, with WIC but without a window or Direct2D. Reads the
+# pictures in test/img.
+img-test.exe: imgtest.c base.c platform.h win32.c image.c
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ imgtest.c $(IMGLIBS)
+
+TESTS    = md-test.exe hl-test.exe view-test.exe img-test.exe
 
 test: $(TESTS)
 	./md-test.exe
 	./hl-test.exe
 	./view-test.exe
+	./img-test.exe
 
 # Check the hand-written COM and Win32 declarations in win32.c against the
 # official mingw headers. Layout (vtable slots, struct fields, GUIDs) is
