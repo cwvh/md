@@ -11,6 +11,7 @@
 #include "layout.c"
 #include "view.c"
 #include "win32.c"
+#include "image.c"
 #include "gfx.c"
 
 // Debug builds (and the BENCH build of the Makefile) take --bench: time the

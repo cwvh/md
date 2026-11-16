@@ -157,6 +157,24 @@ No language: plain monospace text. A line that is far too long to fit in the col
 | alpha | The first letter of the Greek alphabet, which is also used in the names of many software releases. | early |
 | beta | The second letter, and the usual name of a release that is feature complete but not yet well tested. | later |
 
+### Images
+
+A picture on its own line, in Markdown syntax. It is shown at its own size, and
+scaled down to fit when the window is narrower than that:
+
+![A sunset over mountains and a lake](images/photo.jpg "a JPEG, drawn with gradients")
+
+An animated GIF, a ball bouncing over a landscape, plays at the speed the file
+asks for: ![A ball bouncing](images/ball.gif) and it sits in the text like a
+character, as does a small PNG with transparent corners
+<img src="images/logo.png" height="24" alt="md logo"> that keeps the
+background behind it showing through.
+
+A [link around an image](https://example.com/image-link): [<img src="images/logo.png" width="48" alt="md">](https://example.com/logo)
+
+An image that cannot be loaded shows its alt text in a border:
+![nothing here](images/not-there.png)
+
 ### Raw HTML
 
 <div align="center">

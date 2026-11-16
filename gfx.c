@@ -610,36 +610,66 @@ static void os_para_draw(Paragraph *p, Point origin) {
 }
 
 
-// Images
-
-// TODO(milestone 4): decode with WIC (IWICImagingFactory, frame decoder,
-// GIF frame metadata for delay/disposal/offsets), keep composited frames,
-// and draw them through ID2D1Bitmap created from the render target (cache
-// per frame, dropped with the target, see gfx.gen).
-static Image *os_image_decode(Str bytes) {
-    (void)bytes;
-    return 0;
-}
+// Images. image.c decodes and composites; this only turns the pixels of a
+// frame into a Direct2D bitmap and draws it. The bitmap belongs to the render
+// target it was made for (gfx.gen), and is updated in place when the
+// animation moves to another frame.
 
 static void os_image_free(Image *im) {
-    (void)im;
-}
-
-static Size os_image_size(Image *im) {
-    (void)im;
-    return (Size){0};
-}
-
-static i32 os_image_frames(Image *im) {
-    (void)im;
-    return 0;
-}
-
-static i32 os_image_delay(Image *im, i32 frame) {
-    (void)im; (void)frame;
-    return 0;
+    if (im) {
+        release(im->bitmap);
+        image_free(im);
+    }
 }
 
 static void os_image_draw(Image *im, i32 frame, Rect dst) {
-    (void)im; (void)frame; (void)dst;
+    if (!gfx.rt) {
+        return;
+    }
+    image_pixels(im, frame);
+
+    // A picture drawn at less than half its size is reduced first, by whole
+    // halvings to the last one that stays at least as big as it is drawn, since
+    // the bilinear filter only looks at four source pixels. That is judged in
+    // the pixels of the display.
+    f32 tw   = dst.w * gfx.dpi/96;
+    f32 th   = dst.h * gfx.dpi/96;
+    i32 want = 0;
+    while (os_image_frames(im) < 2 && want < IMG_LEVELS-1 &&
+           (f32)(im->w >> (want+1)) >= tw && (f32)(im->h >> (want+1)) >= th) {
+        want++;
+    }
+    if (im->bitmap && (im->bgen != gfx.gen || im->bwant != want)) {
+        release(im->bitmap);
+        im->bitmap = 0;
+    }
+    // Make the bitmap, or one halved once more if the display cannot hold one
+    // so big.
+    D2dBitmapProps props = {{DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED}, 96, 96};
+    for (i32 level = want; !im->bitmap; level++) {
+        i32 w, h;
+        i32 got = level;
+        u32 const *px = image_reduced(im, &got, &w, &h);
+        void *b = 0;
+        if (!FAILED(COM(gfx.rt, CreateBitmap, (D2dSizeU){(u32)w, (u32)h}, px, (u32)w*4,
+                        &props, &b))) {
+            im->bitmap  = b;
+            im->bgen    = gfx.gen;
+            im->bserial = im->serial;
+            im->bwant   = want;
+            im->blevel  = got;
+        } else if (got < level || level >= IMG_LEVELS-1) {
+            return;
+        }
+    }
+    if (im->bserial != im->serial) {
+        // Another frame of an animation, which is not reduced
+        D2dBitmap *bm = im->bitmap;
+        if (FAILED(COM(bm, CopyFromMemory, 0, im->canvas, (u32)im->w*4))) {
+            return;
+        }
+        im->bserial = im->serial;
+    }
+    D2dRect d = d2drect(dst);
+    COM(gfx.rt, DrawBitmap, im->bitmap, &d, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, 0);
 }
