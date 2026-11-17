@@ -22,7 +22,6 @@ typedef __UINTPTR_TYPE__   uptr;
 #  define assert(c)     while (!(c)) __asm__ volatile ("ud2")
 #endif
 #define countof(a)      (iz)(sizeof(a) / sizeof(*(a)))
-#define offsetof(t, f)  (iz)__builtin_offsetof(t, f)
 
 #define min(a, b)       ((a)<(b) ? (a) : (b))
 #define max(a, b)       ((a)>(b) ? (a) : (b))

@@ -42,7 +42,6 @@ int main(void) {
 
 #else
 
-#undef offsetof
 #define COMCHECK
 #include "base.c"
 #include "win32.c"
