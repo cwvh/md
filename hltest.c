@@ -1575,7 +1575,7 @@ static void gen_mutant(u64 *s, Buf *b, iz max) {
         } else if (k == 1) {            // flip a byte
             b->p[at] = (u8)rnd(s, 256);
         } else if (k == 2) {            // delete a byte
-            memcpy(b->p+at, b->p+at+1, (uz)(b->len-at-1));
+            memmove(b->p+at, b->p+at+1, (uz)(b->len-at-1));
             b->len--;
         } else {                        // insert a fragment
             Str f = cstr(frags[rnd(s, (u64)countof(frags))]);
@@ -1583,7 +1583,7 @@ static void gen_mutant(u64 *s, Buf *b, iz max) {
                 f = S("\0");
             }
             if (b->len + f.len <= max) {
-                memcpy(b->p+at+f.len, b->p+at, (uz)(b->len-at));
+                memmove(b->p+at+f.len, b->p+at, (uz)(b->len-at));
                 memcpy(b->p+at, f.data, (uz)f.len);
                 b->len += f.len;
             }
