@@ -800,7 +800,7 @@ W32(b32)    HeapFree(uptr, u32, void *);
 W32(uptr)   GlobalAlloc(u32, uz);
 W32(void *) GlobalLock(uptr);
 W32(b32)    GlobalUnlock(uptr);
-__declspec(dllimport) __attribute((noreturn))
+__declspec(dllimport) _Noreturn
 void ExitProcess(u32);
 
 W32(u16)    RegisterClassExW(const WndClassEx *);

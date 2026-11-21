@@ -151,7 +151,7 @@ static const HlLang hl_langs[HL_L_COUNT];
 
 // Words
 
-__attribute__((noinline)) static u8 hl_peek(HlCtx *h, iz i) {
+NOINLINE static u8 hl_peek(HlCtx *h, iz i) {
     return i>=0 && i<h->n ? h->p[i] : 0;
 }
 
@@ -248,7 +248,7 @@ static b32 hl_wordeq(HlCtx *h, iz b, iz e, const char *lit) {
 
 // Spans
 
-__attribute__((noinline)) static void hl_emit(HlCtx *h, iz b, iz e, HlKind k) {
+NOINLINE static void hl_emit(HlCtx *h, iz b, iz e, HlKind k) {
     if (e > h->len) {
         e = h->len;
     }

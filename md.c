@@ -170,8 +170,22 @@ typedef struct {
     MdChunk  *first, *cur;
     iz        off;      // next free offset in cur
     iz        next;     // size of the next new chunk
-    void    **oom;      // __builtin_longjmp target
+    void    **oom;      // md_longjmp target
 } MdMem;
+
+// Running out of memory jumps back to md_parse. GCC has builtins for that.
+// MSVC's setjmp lives in its C runtime, which md doesn't link, so use the
+// one ntdll.dll exports (the Makefile makes an import library for it). The
+// buffer is sized for MSVC's x64 jmp_buf; GCC's builtins use five words.
+#ifdef _MSC_VER
+int _setjmp(void **);
+_Noreturn void longjmp(void **, int);
+#  define md_setjmp(jb)     _setjmp(jb)
+#  define md_longjmp(jb)    longjmp(jb, 1)
+#else
+#  define md_setjmp(jb)     __builtin_setjmp(jb)
+#  define md_longjmp(jb)    __builtin_longjmp(jb, 1)
+#endif
 
 typedef struct {
     MdChunk *cur;
@@ -179,7 +193,7 @@ typedef struct {
 } MdMark;
 
 static _Noreturn void md_oom(MdMem *m) {
-    __builtin_longjmp(m->oom, 1);
+    md_longjmp(m->oom);
 }
 
 static MdChunk *md_newchunk(MdMem *m, iz need) {
@@ -488,7 +502,7 @@ enum { MD_LBL = 8192 };
 
 typedef struct {
     MdMem   perm, scratch;
-    void   *jb[5];
+    _Alignas(16) void *jb[32];
     Str     src;
     MdNode *free_node;
     MdSeg  *free_seg;
@@ -3140,7 +3154,7 @@ static MdNode *md_parse(Arena *perm, Arena scratch, Str src, u32 ext) {
     p.scratch.arena = scratch;
     p.scratch.next  = MD_CHUNK_MIN;
     p.scratch.oom   = p.jb;
-    if (__builtin_setjmp(p.jb)) {
+    if (md_setjmp(p.jb)) {
         return 0;
     }
     if (src.len > 0x3fffffff) {

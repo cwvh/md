@@ -12,12 +12,25 @@ typedef unsigned long long u64;
 typedef unsigned short     c16;
 typedef float              f32;
 typedef double             f64;
+#ifdef _MSC_VER
+// MSVC, which builds only for x64 here.
+typedef signed   long long iz;
+typedef unsigned long long uz;
+typedef unsigned long long uptr;
+#else
 typedef __PTRDIFF_TYPE__   iz;
 typedef __SIZE_TYPE__      uz;
 typedef __UINTPTR_TYPE__   uptr;
+#endif
 
 #if __GNUC__
 #  define assert(c)     while (!(c)) __builtin_trap()
+#  define NOINLINE      __attribute__((noinline))
+#elif _MSC_VER
+__declspec(noreturn) void __ud2(void);
+#  pragma intrinsic(__ud2)
+#  define assert(c)     while (!(c)) __ud2()
+#  define NOINLINE      __declspec(noinline)
 #else
 #  define assert(c)     while (!(c)) __asm__ volatile ("ud2")
 #endif
@@ -26,17 +39,38 @@ typedef __UINTPTR_TYPE__   uptr;
 #define min(a, b)       ((a)<(b) ? (a) : (b))
 #define max(a, b)       ((a)>(b) ? (a) : (b))
 
-// GCC may emit calls to these, so define them here rather than import
-// them from msvcrt.dll.
+// GCC and MSVC may emit calls to these, so define them here rather than
+// import them from msvcrt.dll. MSVC has no inline assembly on x64, but has
+// intrinsics for the same instructions.
+#ifdef _MSC_VER
+void __stosb(u8 *, u8, uz);
+void __movsb(u8 *, const u8 *, uz);
+#  pragma intrinsic(__stosb, __movsb)
+void *memset(void *, int, uz);
+void *memcpy(void *, const void *, uz);
+void *memmove(void *, const void *, uz);
+#  pragma function(memset, memcpy, memmove)
+// Floating point without the CRT: the linker expects this symbol.
+int _fltused;
+#endif
+
 void *memset(void *dst, int c, uz len) {
     void *r = dst;
+#ifdef _MSC_VER
+    __stosb(dst, (u8)c, len);
+#else
     __asm__ volatile ("rep stosb" : "+D"(dst), "+c"(len) : "a"(c) : "memory");
+#endif
     return r;
 }
 
 void *memcpy(void *dst, const void *src, uz len) {
     void *r = dst;
+#ifdef _MSC_VER
+    __movsb(dst, src, len);
+#else
     __asm__ volatile ("rep movsb" : "+D"(dst), "+S"(src), "+c"(len) : : "memory");
+#endif
     return r;
 }
 
@@ -48,9 +82,17 @@ void *memmove(void *dst, const void *src, uz len) {
     if (d<=s || d>=s+len) {
         return memcpy(dst, src, len);
     }
+#ifdef _MSC_VER
+    // No intrinsic sets the direction flag: copy backward a byte at a time.
+    while (len) {
+        len--;
+        d[len] = s[len];
+    }
+#else
     d += len - 1;
     s += len - 1;
     __asm__ volatile ("std; rep movsb; cld" : "+D"(d), "+S"(s), "+c"(len) : : "memory");
+#endif
     return dst;
 }
 

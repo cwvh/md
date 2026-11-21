@@ -40,6 +40,14 @@ Needs `gcc`, `make` and `windres`. Available in [w64devkit][].
     make                 # md.exe
     make md-debug.exe    # debug info, UBSan traps, guard pages
 
+Or with Visual Studio or its Build Tools, from any console. Everything goes
+into `msvc\`:
+
+    build                # msvc\md.exe
+    build debug          # msvc\md-debug.exe: a PDB, guard pages
+    build test           # build and run the tests
+    build clean
+
 ## Usage
 
     md [FILE]

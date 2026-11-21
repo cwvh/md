@@ -2593,7 +2593,7 @@ static void random_op(u64 *r) {
             fk.clip    = fk_alloc(40, 1);
             fk.cliplen = 0;
             for (iz n = (iz)rnd(r, 20); n > 0; n--) {
-                static const Str pool[] = {S("a"), S("b"), S(" "), S("\n"), S("\r\n"), S("\xC3\xA9"), S("x")};
+                const Str pool[] = {S("a"), S("b"), S(" "), S("\n"), S("\r\n"), S("\xC3\xA9"), S("x")};
                 Str t = pool[rnd(r, countof(pool))];
                 memcpy(fk.clip + fk.cliplen, t.data, (uz)t.len);
                 fk.cliplen += t.len;
