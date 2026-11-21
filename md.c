@@ -174,13 +174,21 @@ typedef struct {
 } MdMem;
 
 // Running out of memory jumps back to md_parse. GCC has builtins for that.
-// MSVC's setjmp lives in its C runtime, which md doesn't link, so use the
-// one ntdll.dll exports (the Makefile makes an import library for it). The
-// buffer is sized for MSVC's x64 jmp_buf; GCC's builtins use five words.
+// MSVC's and tcc's setjmp live in their C runtimes, which md doesn't link,
+// so use the one ntdll.dll exports (the builds make import libraries for
+// it). The buffer is sized for MSVC's x64 jmp_buf; GCC's builtins use five
+// words.
 #ifdef _MSC_VER
 int _setjmp(void **);
 _Noreturn void longjmp(void **, int);
 #  define md_setjmp(jb)     _setjmp(jb)
+#  define md_longjmp(jb)    longjmp(jb, 1)
+#elif __TINYC__
+// MSVC passes the frame to unwind through; tcc makes no unwind tables, so
+// pass none, and longjmp just restores the registers.
+int _setjmp(void **, void *);
+_Noreturn void longjmp(void **, int);
+#  define md_setjmp(jb)     _setjmp(jb, 0)
 #  define md_longjmp(jb)    longjmp(jb, 1)
 #else
 #  define md_setjmp(jb)     __builtin_setjmp(jb)

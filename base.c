@@ -32,12 +32,38 @@ __declspec(noreturn) void __ud2(void);
 #  define assert(c)     while (!(c)) __ud2()
 #  define NOINLINE      __declspec(noinline)
 #else
+// tcc
 #  define assert(c)     while (!(c)) __asm__ volatile ("ud2")
+#  define NOINLINE      __attribute__((noinline))
 #endif
 #define countof(a)      (iz)(sizeof(a) / sizeof(*(a)))
 
 #define min(a, b)       ((a)<(b) ? (a) : (b))
 #define max(a, b)       ((a)>(b) ? (a) : (b))
+
+#ifdef __TCC_BCHECK__
+// tcc -b: the bounds checker brings its own, checked, over tcc's C runtime,
+// and only starts up through that runtime. So enter through main, which
+// calls the program's own entry point.
+void *memset(void *, int, uz);
+void *memcpy(void *, const void *, uz);
+void *memmove(void *, const void *, uz);
+#  define WinMainCRTStartup md_start
+#  define mainCRTStartup    md_start
+void md_start(void);
+// Windows names a thread by raising exception 0x406D1388, which whoever
+// raises it also handles, but the checker's handler sees it first and stops
+// the program. Resume past it before the checker looks. No parameter list,
+// so the tests' own declarations still agree with this one.
+__declspec(dllimport) void *AddVectoredExceptionHandler();
+static i32 md_threadname(void *ep) {
+    return **(u32 **)ep == 0x406d1388 ? -1 : 0;  // continue execution : search
+}
+int main(void) {
+    AddVectoredExceptionHandler(1, md_threadname);
+    md_start();
+}
+#else
 
 // GCC and MSVC may emit calls to these, so define them here rather than
 // import them from msvcrt.dll. MSVC has no inline assembly on x64, but has
@@ -95,6 +121,7 @@ void *memmove(void *dst, const void *src, uz len) {
 #endif
     return dst;
 }
+#endif // __TCC_BCHECK__
 
 
 // Arena

@@ -1514,7 +1514,16 @@ static Str bstr(Buf *b) {
     return (Str){b->p, b->len};
 }
 
-static u64 scale = 100;
+// The path tests' input size in percent (-z) and time limit (-l). The bounds
+// checker slows the lexers down about tenfold, so under it the inputs are
+// smaller and the limit looser. A quadratic lexer still blows far past it.
+#ifdef __TCC_BCHECK__
+static u64 scale   = 25;
+static u64 path_ms = 1500;
+#else
+static u64 scale   = 100;
+static u64 path_ms = 400;
+#endif
 
 static void brep(Buf *b, const char *s, iz n) {
     Str t = cstr(s);
@@ -1961,7 +1970,7 @@ static i32 run(Arena all) {
     u64 seed  = 0x5eed;
     u64 iters = 3000;
     u64 start = 0;
-    u64 limit = 400;
+    u64 limit = path_ms;
     Str which = {0};
     Str mlang = {0};
     Str mtext = {0};

@@ -330,8 +330,16 @@ static Str bstr(Buf *b) {
 }
 
 // Percent by which the slow-input tests scale their repeat counts (-z), to
-// check that doubling the input doubles the time.
-static u64 scale = 100;
+// check that doubling the input doubles the time, and the time each may take.
+// The bounds checker slows md down about tenfold, so under it the inputs are
+// smaller and the limit looser. A quadratic parser still blows far past it.
+#ifdef __TCC_BCHECK__
+static u64 scale   = 50;
+static i32 path_ms = 3000;
+#else
+static u64 scale   = 100;
+static i32 path_ms = 1000;
+#endif
 
 static void brep(Buf *b, const char *s, iz n) {
     Str t = cstr(s);
@@ -1973,7 +1981,7 @@ static i32 run(Arena all) {
         bad += run_unit(&r);
     }
     if (all_tests || equals(which, S("path"))) {
-        bad += run_paths(&r, 1000);
+        bad += run_paths(&r, path_ms);
     }
     if (all_tests || equals(which, S("random"))) {
         ctx.iter = 0;

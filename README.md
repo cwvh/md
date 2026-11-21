@@ -42,6 +42,10 @@ Needs `gcc`, `make` and `windres`. Available in [w64devkit][].
     make test            # build and run the tests
     make clean
 
+Or with [tcc][], whose debug build checks every memory access:
+
+    CC=tcc make debug
+
 Or with Visual Studio or its Build Tools, from any console:
 
     build                # md.exe
@@ -111,3 +115,4 @@ language.
 Public domain. See [UNLICENSE](UNLICENSE).
 
 [w64devkit]: https://github.com/skeeto/w64devkit
+[tcc]: https://bellard.org/tcc/

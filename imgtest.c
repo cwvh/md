@@ -1145,6 +1145,12 @@ static i32 run(Arena all) {
     u64 start = 0;
     Str which = {0};
     Str file  = {0};
+#ifdef __TCC_BCHECK__
+    // tcc's runtime stops on exceptions that Windows raises and handles
+    // internally, as WIC does when decoding broken images, so by default
+    // only run the phase that decodes good ones.
+    which     = S("many");
+#endif
     r.dir     = S("test");
     Args args = getargs(&small);
     for (i32 i = 1; i < args.argc; i++) {

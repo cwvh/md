@@ -2901,6 +2901,12 @@ static i32 run(Arena all) {
     Output *o = ctx.out;
     u64 t0 = GetTickCount64();
     b32 all_tests = !which.len;
+    b32 timing    = all_tests;
+#ifdef __TCC_BCHECK__
+    // The bounds checker slows everything tenfold, which makes timings
+    // meaningless, so skip them unless asked for.
+    timing = 0;
+#endif
     if (all_tests || equals(which, S("unit"))) {
         test_all();
         print(o, S("unit: ok, "));
@@ -2928,7 +2934,7 @@ static i32 run(Arena all) {
         printi64(o, (i64)ctx.n_multi);
         print(o, S(")\n"));
     }
-    if (all_tests || equals(which, S("time"))) {
+    if (timing || equals(which, S("time"))) {
         test_time();
     }
     print(o, S("view-test: ok, "));
