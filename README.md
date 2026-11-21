@@ -38,15 +38,20 @@ auto-reload when the file changes on disk, keeping your place.
 Needs `gcc`, `make` and `windres`. Available in [w64devkit][].
 
     make                 # md.exe
-    make md-debug.exe    # debug info, UBSan traps, guard pages
+    make debug           # md-debug.exe: debug info, UBSan traps, guard pages
+    make test            # build and run the tests
+    make clean
 
-Or with Visual Studio or its Build Tools, from any console. Everything goes
-into `msvc\`:
+Or with Visual Studio or its Build Tools, from any console:
 
-    build                # msvc\md.exe
-    build debug          # msvc\md-debug.exe: a PDB, guard pages
-    build test           # build and run the tests
+    build                # md.exe
+    build debug          # md-debug.exe: a PDB, guard pages
+    build test
     build clean
+
+Every build writes the programs next to the sources, and its other files to
+`obj/`. Set `OUT` to build somewhere else, as in `OUT=gcc make` or
+`set OUT=msvc` then `build`.
 
 ## Usage
 

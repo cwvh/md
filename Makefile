@@ -1,4 +1,29 @@
+# Executables go into OUT, everything else into OUT/obj.
+#   make                         release md.exe, in .
+#   make debug | bench | test | clean
+#   make OUT=foo debug
 CC       = gcc
+OUT     ?= .
+OBJ      = $(OUT)/obj
+# Names the compiler that built the objects, so that switching compilers
+# rebuilds. Rewritten whenever its content differs (build.bat leaves its own
+# there too), so the next make notices.
+STAMP    = $(OBJ)/cc
+ifneq ($(MAKECMDGOALS),clean)
+$(shell mkdir -p $(OBJ); echo '$(CC)' | cmp -s - $(STAMP) || echo '$(CC)' > $(STAMP))
+endif
+
+# The DLLs each kind of program imports, all of which ship with Windows.
+# Naming exactly these keeps a stray import, or a stray libc call, from
+# linking.
+APPDLLS  = kernel32 user32 gdi32 ole32 advapi32 shell32 comdlg32 dwmapi \
+           d2d1 dwrite
+TESTDLLS = kernel32
+IMGDLLS  = kernel32 ole32
+LIBS     = $(APPDLLS:%=-l%)
+TESTLIBS = $(TESTDLLS:%=-l%)
+IMGLIBS  = $(IMGDLLS:%=-l%)
+
 CFLAGS   = -std=c11 -nostdlib \
            -Wall -Wextra -Wconversion -Wno-sign-conversion -Wno-unused-function \
            -Wdouble-promotion -Wshadow -Wnull-dereference -Wstrict-prototypes -Wvla
@@ -8,54 +33,58 @@ RELEASE  = -O2 -s -fno-asynchronous-unwind-tables
 DEBUG    = -g3 -DDEBUG -fsanitize=undefined -fsanitize=bounds-strict \
            -fsanitize-trap -ftrivial-auto-var-init=pattern
 GUI      = -mwindows
-# Only DLLs that ship with Windows. libgcc for ___chkstk_ms. -nostdlib
-# keeps msvcrt out, so a stray libc call is a link error, not an import.
-LDLIBS   = -lkernel32 -luser32 -lgdi32 -lole32 -ladvapi32 -lshell32 \
-           -lcomdlg32 -ldwmapi -ld2d1 -ldwrite -lgcc
-TESTLIBS = -lkernel32 -lgcc
-IMGLIBS  = -lkernel32 -lole32 -lgcc
+# libgcc for ___chkstk_ms. -nostdlib keeps msvcrt out, so a stray libc call
+# is a link error, not an import.
+RTLIBS   = -lgcc
+
 # Portable core, then the Windows layer.
 CORE     = base.c platform.h md.c mdtables.c highlight.c layout.c view.c
 SRC      = $(CORE) win32.c image.c gfx.c
 WINDRES  = windres
 # The icon, compiled to an object linked into every build of the app.
-RES      = md-res.o
+RES      = $(OBJ)/md.res
+EXES     = $(OUT)/md.exe $(OUT)/md-debug.exe $(OUT)/md-bench.exe
+TESTS    = $(OUT)/md-test.exe $(OUT)/hl-test.exe $(OUT)/view-test.exe \
+           $(OUT)/img-test.exe
 
-md.exe: main.c $(SRC) $(RES)
-	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(RES) $(LDLIBS)
+.DEFAULT_GOAL := release
+release: $(OUT)/md.exe
+debug: $(OUT)/md-debug.exe
+bench: $(OUT)/md-bench.exe
+
+$(OUT)/md.exe: main.c $(SRC) $(RES) $(STAMP)
+	$(CC) $(CFLAGS) $(RELEASE) $(GUI) -o $@ main.c $(RES) $(LIBS) $(RTLIBS)
 
 # A release build that also takes --bench, for timing. Not shipped.
-md-bench.exe: main.c $(SRC) $(RES)
-	$(CC) $(CFLAGS) $(RELEASE) -DBENCH $(GUI) -o $@ main.c $(RES) $(LDLIBS)
+$(OUT)/md-bench.exe: main.c $(SRC) $(RES) $(STAMP)
+	$(CC) $(CFLAGS) $(RELEASE) -DBENCH $(GUI) -o $@ main.c $(RES) $(LIBS) $(RTLIBS)
 
-md-debug.exe: main.c $(SRC) $(RES)
-	$(CC) $(CFLAGS) $(DEBUG) $(GUI) -o $@ main.c $(RES) $(LDLIBS)
+$(OUT)/md-debug.exe: main.c $(SRC) $(RES) $(STAMP)
+	$(CC) $(CFLAGS) $(DEBUG) $(GUI) -o $@ main.c $(RES) $(LIBS) $(RTLIBS)
 
-$(RES): res/md.rc res/md.ico
+$(RES): res/md.rc res/md.ico $(STAMP)
 	$(WINDRES) -O coff -o $@ res/md.rc
 
-md-test.exe: test.c $(SRC)
-	$(CC) $(CFLAGS) $(DEBUG) -o $@ test.c $(TESTLIBS)
+$(OUT)/md-test.exe: test.c $(SRC) $(STAMP)
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ test.c $(TESTLIBS) $(RTLIBS)
 
-hl-test.exe: hltest.c base.c win32.c highlight.c
-	$(CC) $(CFLAGS) $(DEBUG) -o $@ hltest.c $(TESTLIBS)
+$(OUT)/hl-test.exe: hltest.c base.c win32.c highlight.c $(STAMP)
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ hltest.c $(TESTLIBS) $(RTLIBS)
 
 # Layout and view against a fake, deterministic platform (fakeos.c).
-view-test.exe: viewtest.c fakeos.c $(CORE) win32.c
-	$(CC) $(CFLAGS) $(DEBUG) -o $@ viewtest.c $(TESTLIBS)
+$(OUT)/view-test.exe: viewtest.c fakeos.c $(CORE) win32.c $(STAMP)
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ viewtest.c $(TESTLIBS) $(RTLIBS)
 
 # Image decoding, with WIC but without a window or Direct2D. Reads the
 # pictures in test/img.
-img-test.exe: imgtest.c base.c platform.h win32.c image.c
-	$(CC) $(CFLAGS) $(DEBUG) -o $@ imgtest.c $(IMGLIBS)
-
-TESTS    = md-test.exe hl-test.exe view-test.exe img-test.exe
+$(OUT)/img-test.exe: imgtest.c base.c platform.h win32.c image.c $(STAMP)
+	$(CC) $(CFLAGS) $(DEBUG) -o $@ imgtest.c $(IMGLIBS) $(RTLIBS)
 
 test: $(TESTS)
-	./md-test.exe
-	./hl-test.exe
-	./view-test.exe
-	./img-test.exe
+	$(OUT)/md-test.exe
+	$(OUT)/hl-test.exe
+	$(OUT)/view-test.exe
+	$(OUT)/img-test.exe
 
 # Check the hand-written COM and Win32 declarations in win32.c against the
 # official mingw headers. Layout (vtable slots, struct fields, GUIDs) is
@@ -75,6 +104,7 @@ comcheck: comcheck.c win32.c base.c comcheck-consts.inc
 	./comcheck-consts.exe
 
 clean:
-	rm -f md.exe md-debug.exe md-bench.exe $(RES) $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
+	rm -f $(EXES) $(TESTS) comcheck.exe comcheck-consts.exe comcheck-consts.inc
+	rm -rf $(OBJ)
 
-.PHONY: test comcheck clean
+.PHONY: release debug bench test comcheck clean

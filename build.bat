@@ -1,19 +1,24 @@
 @echo off
 rem Build md with the Visual Studio Build Tools (cl.exe) instead of GCC.
-rem Everything goes into msvc\, under the names the Makefile uses.
+rem The programs go into %OUT% (by default the directory this script is in),
+rem under the names the Makefile uses, and everything else into %OUT%\obj.
 rem
 rem   build [target...]
-rem     release   msvc\md.exe (the default)
-rem     debug     msvc\md-debug.exe: debug info (a PDB), guard pages
-rem     bench     msvc\md-bench.exe: a release build that takes --bench
+rem     release   md.exe (the default)
+rem     debug     md-debug.exe: debug info (a PDB), guard pages
+rem     bench     md-bench.exe: a release build that takes --bench
 rem     test      build the four test programs and run them
-rem     clean     delete msvc\
+rem     clean     delete the programs and %OUT%\obj
 rem     help      this list
 rem
 rem Works from any console: when cl.exe isn't on PATH, it finds the newest
 rem Visual Studio or Build Tools install and runs its vcvars64.bat.
 setlocal
 cd /d "%~dp0"
+
+if not defined OUT set "OUT=."
+if "%OUT:~-1%"=="\" set "OUT=%OUT:~0,-1%"
+set "OBJ=%OUT%\obj"
 
 set TARGETS=%*
 if not defined TARGETS set TARGETS=release
@@ -35,7 +40,10 @@ echo usage: build [release^|debug^|bench^|test^|clean^|help]...
 exit /b 0
 
 :clean
-if exist msvc rmdir /s /q msvc
+for %%e in (md md-debug md-bench md-test hl-test view-test img-test) do (
+    if exist "%OUT%\%%e.exe" del /q "%OUT%\%%e.exe"
+)
+if exist "%OBJ%" rmdir /s /q "%OBJ%"
 exit /b 0
 
 :release
@@ -60,23 +68,23 @@ call :console hl-test hltest.c kernel32.lib || exit /b 1
 call :console view-test viewtest.c kernel32.lib || exit /b 1
 call :console img-test imgtest.c "kernel32.lib ole32.lib" || exit /b 1
 for %%p in (md-test hl-test view-test img-test) do (
-    msvc\%%p.exe || exit /b 1
+    "%OUT%\%%p.exe" || exit /b 1
 )
 exit /b 0
 
 
 rem The windowed app: :app NAME "COMPILER FLAGS" LINKER-DEBUG-FLAG
 :app
-cl %CFLAGS% %~2 -Fo:msvc\%1.obj -Fd:msvc\%1.pdb -Fe:msvc\%1.exe main.c ^
-    msvc\md.res -link %LDFLAGS% %3 -subsystem:windows ^
-    -entry:WinMainCRTStartup %LIBS% || exit /b 1
+cl %CFLAGS% %~2 -Fo:"%OBJ%\%1.obj" -Fd:"%OBJ%\%1.pdb" -Fe:"%OUT%\%1.exe" ^
+    main.c "%OBJ%\md.res" -link %LDFLAGS% -pdb:"%OBJ%\%1.pdb" %3 ^
+    -subsystem:windows -entry:WinMainCRTStartup %LIBS% || exit /b 1
 exit /b 0
 
 rem A test program, always with the debug checks: :console NAME SOURCE "LIBS"
 :console
-cl %CFLAGS% %DEBUG% -Fo:msvc\%1.obj -Fd:msvc\%1.pdb -Fe:msvc\%1.exe %2 ^
-    -link %LDFLAGS% -debug -subsystem:console -entry:mainCRTStartup ^
-    %~3 msvc\ntdll-crt.lib || exit /b 1
+cl %CFLAGS% %DEBUG% -Fo:"%OBJ%\%1.obj" -Fd:"%OBJ%\%1.pdb" ^
+    -Fe:"%OUT%\%1.exe" %2 -link %LDFLAGS% -debug -pdb:"%OBJ%\%1.pdb" ^
+    -subsystem:console -entry:mainCRTStartup %~3 "%OBJ%\ntdll-crt.lib" || exit /b 1
 exit /b 0
 
 
@@ -85,7 +93,7 @@ rem Find the tools and make what every build links. Runs once.
 if defined SETUP_DONE exit /b 0
 where /q cl.exe || call :vcvars || exit /b 1
 cd /d "%~dp0"
-if not exist msvc mkdir msvc
+if not exist "%OBJ%" mkdir "%OBJ%"
 
 rem No C runtime, as with GCC. GCC's -Wconversion build already checks
 rem conversions; these are the MSVC warnings it doesn't share: int to float,
@@ -98,13 +106,15 @@ set DEBUG=-Od -Zi -DDEBUG
 rem A 2 MB stack, like GCC's default.
 set LDFLAGS=-nologo -nodefaultlib -stack:0x200000 -opt:ref -opt:icf
 set LIBS=kernel32.lib user32.lib gdi32.lib ole32.lib advapi32.lib ^
-    shell32.lib comdlg32.lib dwmapi.lib d2d1.lib dwrite.lib msvc\ntdll-crt.lib
+    shell32.lib comdlg32.lib dwmapi.lib d2d1.lib dwrite.lib "%OBJ%\ntdll-crt.lib"
 
 rem ntdll.dll exports setjmp, longjmp and the stack probe, but the Windows
 rem SDK's ntdll.lib leaves them out (see md.c), so make an import library.
-> msvc\ntdll-crt.def (echo LIBRARY ntdll.dll& echo EXPORTS& echo _setjmp& echo longjmp& echo __chkstk)
-lib -nologo -machine:x64 -def:msvc\ntdll-crt.def -out:msvc\ntdll-crt.lib >nul || exit /b 1
-rc -nologo -i res -fo msvc\md.res res\md.rc || exit /b 1
+> "%OBJ%\ntdll-crt.def" (echo LIBRARY ntdll.dll& echo EXPORTS& echo _setjmp& echo longjmp& echo __chkstk)
+lib -nologo -machine:x64 -def:"%OBJ%\ntdll-crt.def" -out:"%OBJ%\ntdll-crt.lib" >nul || exit /b 1
+rc -nologo -i res -fo "%OBJ%\md.res" res\md.rc || exit /b 1
+rem Tell the Makefile that its builds here are out of date.
+> "%OBJ%\cc" echo cl
 set SETUP_DONE=1
 exit /b 0
 
